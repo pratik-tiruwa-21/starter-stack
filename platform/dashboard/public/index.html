@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClawdContext OS — Mission Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Boot Sequence Overlay -->
+  <div id="boot-overlay">
+    <div class="boot-terminal">
+      <div class="boot-header">CLAWDCONTEXT OS v0.1.0 — SYSTEM BOOT</div>
+      <div id="boot-log"></div>
+      <div class="boot-progress">
+        <div id="boot-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Dashboard -->
+  <div id="dashboard" class="hidden">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="logo">
+          <span class="logo-shield">⬡</span>
+          <span class="logo-text">ClawdContext<span class="logo-os">OS</span></span>
+        </div>
+        <div class="sys-info">
+          <span class="sys-tag">v0.1.0</span>
+          <span id="uptime" class="sys-tag">BOOT</span>
+        </div>
+      </div>
+      <div class="topbar-center">
+        <div class="status-lights">
+          <div class="light" id="light-openclaw" title="OpenClaw Agent"><span class="light-dot"></span>CLAW</div>
+          <div class="light" id="light-proxy" title="AgentProxy"><span class="light-dot"></span>PROXY</div>
+          <div class="light" id="light-scanner" title="Scanner"><span class="light-dot"></span>SCAN</div>
+          <div class="light" id="light-recorder" title="FlightRecorder"><span class="light-dot"></span>REC</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button class="btn-action" onclick="runDemoAttack()">▶ SIMULATE ATTACK</button>
+        <button class="btn-action btn-secondary" onclick="reloadSkills()">↻ RELOAD SKILLS</button>
+      </div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-nav">
+      <button class="tab active" data-tab="defense" onclick="switchTab('defense')">⬡ DEFENSE LAYERS</button>
+      <button class="tab" data-tab="openclaw" onclick="switchTab('openclaw')">🐾 OPENCLAW</button>
+      <button class="tab" data-tab="terminal" onclick="switchTab('terminal')">⌨ TERMINAL</button>
+      <button class="tab" data-tab="preview" onclick="switchTab('preview')">📄 PREVIEW</button>
+      <button class="tab" data-tab="proxy" onclick="switchTab('proxy')">◈ AGENT PROXY</button>
+      <button class="tab" data-tab="scanner" onclick="switchTab('scanner')">⊘ SCANNER</button>
+      <button class="tab" data-tab="audit" onclick="switchTab('audit')">▤ AUDIT LOG</button>
+      <button class="tab" data-tab="skills" onclick="switchTab('skills')">⚙ SKILLS</button>
+    </nav>
+
+    <!-- Content Panels -->
+    <main class="content">
+      <!-- DEFENSE TAB -->
+      <section id="tab-defense" class="tab-content active">
+        <div class="grid-3">
+          <!-- CER Gauge -->
+          <div class="panel">
+            <div class="panel-header">CER — CONTEXT EFFICIENCY RATIO</div>
+            <div class="cer-container">
+              <div class="cer-gauge">
+                <svg viewBox="0 0 200 120" class="cer-svg">
+                  <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#1a1a2e" stroke-width="12"/>
+                  <path id="cer-arc" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#00E676" stroke-width="12" stroke-dasharray="251" stroke-dashoffset="251" stroke-linecap="round"/>
+                  <text id="cer-value" x="100" y="85" text-anchor="middle" class="cer-text">—</text>
+                  <text id="cer-label" x="100" y="105" text-anchor="middle" class="cer-label">INITIALIZING</text>
+                </svg>
+              </div>
+              <div class="cer-stats" id="cer-stats"></div>
+            </div>
+          </div>
+
+          <!-- Stats Panel -->
+          <div class="panel">
+            <div class="panel-header">PROXY STATISTICS</div>
+            <div class="stat-grid">
+              <div class="stat">
+                <div class="stat-value" id="stat-total">0</div>
+                <div class="stat-label">EVALUATIONS</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value stat-allow" id="stat-allowed">0</div>
+                <div class="stat-label">ALLOWED</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value stat-deny" id="stat-denied">0</div>
+                <div class="stat-label">DENIED</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value stat-gate" id="stat-gated">0</div>
+                <div class="stat-label">HUMAN GATED</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Layer Status -->
+          <div class="panel">
+            <div class="panel-header">SECURITY LAYERS</div>
+            <div id="layer-status" class="layer-list"></div>
+          </div>
+        </div>
+
+        <!-- Live Event Stream -->
+        <div class="panel full-width">
+          <div class="panel-header">
+            LIVE EVENT STREAM
+            <span id="event-count" class="badge">0</span>
+          </div>
+          <div id="event-stream" class="event-stream"></div>
+        </div>
+      </section>
+
+      <!-- OPENCLAW TAB -->
+      <section id="tab-openclaw" class="tab-content">
+        <div class="grid-openclaw">
+          <!-- Chat Panel -->
+          <div class="panel chat-panel">
+            <div class="panel-header">
+              🐾 OPENCLAW AGENT
+              <div class="header-actions">
+                <span id="openclaw-status" class="sys-tag">CONNECTING</span>
+                <button class="btn-small" onclick="clearChat()">CLEAR</button>
+              </div>
+            </div>
+            <div id="chat-messages" class="chat-messages">
+              <div class="chat-msg assistant">
+                <div class="chat-role">OpenClaw</div>
+                <div class="chat-content">Welcome to ClawdContext OS. I'm OpenClaw — the AI agent runtime.<br>All my tool calls go through <strong>AgentProxy</strong> (Layer 4) and are logged by <strong>FlightRecorder</strong> (Layer 5).<br><br>Try: <code>read file CLAUDE.md</code> · <code>list files</code> · <code>search for security</code> · <code>help</code></div>
+              </div>
+            </div>
+            <form id="chat-form" class="chat-input-area">
+              <input id="chat-input" class="chat-input" type="text" placeholder="Talk to OpenClaw... (try: read file CLAUDE.md)" autocomplete="off">
+              <button type="submit" class="btn-action chat-send">SEND</button>
+            </form>
+          </div>
+
+          <!-- Kernel State -->
+          <div class="panel">
+            <div class="panel-header">MARKDOWN OS KERNEL</div>
+            <div id="kernel-state" class="kernel-state">
+              <div class="kernel-info">Loading kernel state...</div>
+            </div>
+            <div class="panel-header" style="margin-top: 16px;">AGENT STATS</div>
+            <div id="openclaw-stats" class="kernel-state">
+              <div class="kernel-info">Loading...</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PROXY TAB -->
+      <section id="tab-proxy" class="tab-content">
+
+      <!-- TERMINAL TAB -->
+      <section id="tab-terminal" class="tab-content">
+        <div class="terminal-layout">
+          <div class="panel terminal-panel">
+            <div class="panel-header">
+              ⌨ OPENCLAW TERMINAL
+              <div class="header-actions">
+                <span id="terminal-status" class="sys-tag">DISCONNECTED</span>
+                <button class="btn-small" onclick="clearTerminal()">CLEAR</button>
+                <button class="btn-small" onclick="reconnectTerminal()">RECONNECT</button>
+              </div>
+            </div>
+            <div id="terminal-container" class="terminal-container"></div>
+          </div>
+          <div class="terminal-sidebar">
+            <div class="panel">
+              <div class="panel-header">QUICK COMMANDS</div>
+              <div class="quick-commands">
+                <button class="cmd-btn" onclick="termCmd('help')">help</button>
+                <button class="cmd-btn" onclick="termCmd('status')">status</button>
+                <button class="cmd-btn" onclick="termCmd('read file CLAUDE.md')">read CLAUDE.md</button>
+                <button class="cmd-btn" onclick="termCmd('list files')">list files</button>
+                <button class="cmd-btn" onclick="termCmd('search for security')">search security</button>
+                <button class="cmd-btn" onclick="termCmd('list skills')">list skills</button>
+                <button class="cmd-btn" onclick="termCmd('check context efficiency')">check CER</button>
+                <button class="cmd-btn" onclick="termCmd('explain eureka concepts')">eureka</button>
+                <button class="cmd-btn" onclick="termCmd('explain security layers')">layers</button>
+                <button class="cmd-btn" onclick="termCmd('who are you')">who are you</button>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">SESSION INFO</div>
+              <div id="terminal-info" class="kernel-state">
+                <div class="kernel-item">
+                  <span class="kernel-icon loaded">🤖</span>
+                  <span class="kernel-file">Provider</span>
+                  <span class="kernel-status" id="term-provider">—</span>
+                </div>
+                <div class="kernel-item">
+                  <span class="kernel-icon loaded">⏱</span>
+                  <span class="kernel-file">Latency</span>
+                  <span class="kernel-status" id="term-latency">—</span>
+                </div>
+                <div class="kernel-item">
+                  <span class="kernel-icon loaded">📊</span>
+                  <span class="kernel-file">Commands</span>
+                  <span class="kernel-status" id="term-commands">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PREVIEW TAB -->
+      <section id="tab-preview" class="tab-content">
+        <div class="preview-layout">
+          <div class="panel preview-sidebar-panel">
+            <div class="panel-header">
+              📁 WORKSPACE FILES
+              <button class="btn-small" onclick="loadPreviewFiles()">↻ REFRESH</button>
+            </div>
+            <div id="preview-file-list" class="preview-file-list">
+              <div class="result-placeholder">Loading files...</div>
+            </div>
+          </div>
+          <div class="panel preview-content-panel">
+            <div class="panel-header">
+              <span id="preview-filename">📄 SELECT A FILE</span>
+              <div class="header-actions">
+                <button class="btn-small" id="preview-raw-btn" onclick="togglePreviewRaw()" style="display:none">RAW</button>
+                <button class="btn-small" id="preview-copy-btn" onclick="copyPreviewContent()" style="display:none">COPY</button>
+              </div>
+            </div>
+            <div id="preview-content" class="preview-content">
+              <div class="result-placeholder">Choose a file from the sidebar to preview its contents.<br>Markdown files will be rendered with formatting.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-proxy" class="tab-content">
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-header">EVALUATE TOOL CALL</div>
+            <form id="eval-form" class="form">
+              <div class="form-group">
+                <label>Skill</label>
+                <select id="eval-skill" class="input">
+                  <option value="web-search">web-search</option>
+                  <option value="file-writer">file-writer</option>
+                  <option value="_malicious">_malicious (poisoned)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Tool</label>
+                <input id="eval-tool" class="input" value="file_read:/workspace/data.txt" placeholder="e.g. file_read:/workspace/*">
+              </div>
+              <div class="form-group">
+                <label>Context</label>
+                <textarea id="eval-context" class="input textarea" rows="3" placeholder="Prompt context..."></textarea>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Tokens Used</label>
+                  <input id="eval-tokens" class="input" type="number" value="50000">
+                </div>
+                <div class="form-group">
+                  <label>Token Budget</label>
+                  <input id="eval-budget" class="input" type="number" value="200000">
+                </div>
+              </div>
+              <button type="submit" class="btn-action">EVALUATE</button>
+            </form>
+          </div>
+          <div class="panel">
+            <div class="panel-header">VERDICT</div>
+            <div id="eval-result" class="result-display">
+              <div class="result-placeholder">Submit a tool call to see the AgentProxy verdict</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SCANNER TAB -->
+      <section id="tab-scanner" class="tab-content">
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-header">SCAN CONTENT</div>
+            <form id="scan-form" class="form">
+              <div class="form-group">
+                <label>Content to Scan</label>
+                <textarea id="scan-content" class="input textarea" rows="10" placeholder="Paste SKILL.md, CLAUDE.md, or any agent file content..."></textarea>
+              </div>
+              <div class="form-row">
+                <button type="submit" class="btn-action">SCAN FOR TTPs</button>
+                <button type="button" class="btn-action btn-secondary" onclick="scanWorkspace()">SCAN WORKSPACE</button>
+              </div>
+            </form>
+          </div>
+          <div class="panel">
+            <div class="panel-header">SCAN RESULTS</div>
+            <div id="scan-result" class="result-display">
+              <div class="result-placeholder">Submit content to scan for TTP patterns</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel full-width">
+          <div class="panel-header">TTP PATTERN DATABASE</div>
+          <div id="pattern-list" class="pattern-list"></div>
+        </div>
+      </section>
+
+      <!-- AUDIT TAB -->
+      <section id="tab-audit" class="tab-content">
+        <div class="panel full-width">
+          <div class="panel-header">
+            HASH-CHAINED AUDIT LOG
+            <div class="header-actions">
+              <button class="btn-small" onclick="verifyChain()">⛓ VERIFY CHAIN</button>
+              <button class="btn-small" onclick="checkAnomalies()">⚠ ANOMALIES</button>
+            </div>
+          </div>
+          <div id="chain-status" class="chain-status"></div>
+          <div id="audit-log" class="audit-log"></div>
+        </div>
+      </section>
+
+      <!-- SKILLS TAB -->
+      <section id="tab-skills" class="tab-content">
+        <div class="panel full-width">
+          <div class="panel-header">
+            REGISTERED SKILLS & CAPABILITIES
+            <button class="btn-small" onclick="reloadSkills()">↻ RELOAD</button>
+          </div>
+          <div id="skills-list" class="skills-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>ClawdContext OS — Anderson Report (1972): Complete Mediation, Tamper-Proof, Verifiable</span>
+      <span id="footer-time"></span>
+    </footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

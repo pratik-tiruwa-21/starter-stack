@@ -1,0 +1,148 @@
+# ClawdContext OS — Platform Services
+# Real running microservices: AgentProxy, Scanner, FlightRecorder, Dashboard
+#
+# Usage:
+#   docker compose -f docker-compose.platform.yml up -d --build
+#   docker compose -f docker-compose.platform.yml logs -f
+#   docker compose -f docker-compose.platform.yml down
+#
+# Full stack (platform + observability):
+#   docker compose -f docker-compose.platform.yml -f docker-compose.yaml up -d --build
+
+services:
+
+  # ═══ Layer 4: AgentProxy (Reference Monitor) ═══
+  agent-proxy:
+    build: ./platform/agent-proxy
+    container_name: ccos-agent-proxy
+    ports:
+      - "8400:8400"
+    environment:
+      - SKILLS_DIR=/workspace/agent/skills
+      - LOG_LEVEL=info
+    volumes:
+      - ./agent/skills:/workspace/agent/skills:ro
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8400/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    labels:
+      com.clawdcontext.layer: "4"
+      com.clawdcontext.component: "agent-proxy"
+
+  # ═══ Layer 1: Scanner API (TTP Detection) ═══
+  scanner-api:
+    build: ./platform/scanner-api
+    container_name: ccos-scanner-api
+    ports:
+      - "8401:8401"
+    environment:
+      - WORKSPACE_DIR=/workspace
+    volumes:
+      - ./agent:/workspace/agent:ro
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8401/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    labels:
+      com.clawdcontext.layer: "1"
+      com.clawdcontext.component: "scanner-api"
+
+  # ═══ Layer 5: FlightRecorder (Audit Log) ═══
+  flight-recorder:
+    build: ./platform/flight-recorder
+    container_name: ccos-flight-recorder
+    ports:
+      - "8402:8402"
+    environment:
+      - LOG_LEVEL=info
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8402/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    labels:
+      com.clawdcontext.layer: "5"
+      com.clawdcontext.component: "flight-recorder"
+
+  # ═══ OpenClaw Agent Runtime ═══
+  openclaw:
+    build: ./platform/openclaw
+    container_name: ccos-openclaw
+    ports:
+      - "8403:8403"
+    environment:
+      - AGENT_PROXY_URL=http://agent-proxy:8400
+      - FLIGHT_RECORDER_URL=http://flight-recorder:8402
+      - WORKSPACE_DIR=/workspace/agent
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - MODEL_NAME=${DEEPSEEK_MODEL:-deepseek-chat}
+      - LOG_LEVEL=info
+    volumes:
+      - ./agent:/workspace/agent:ro
+    depends_on:
+      agent-proxy:
+        condition: service_healthy
+      flight-recorder:
+        condition: service_healthy
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8403/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    labels:
+      com.clawdcontext.layer: "agent"
+      com.clawdcontext.component: "openclaw"
+
+  # ═══ Dashboard (Mission Control) ═══
+  dashboard:
+    build: ./platform/dashboard
+    container_name: ccos-dashboard
+    ports:
+      - "3000:3000"
+    depends_on:
+      agent-proxy:
+        condition: service_healthy
+      scanner-api:
+        condition: service_healthy
+      flight-recorder:
+        condition: service_healthy
+      openclaw:
+        condition: service_healthy
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    labels:
+      com.clawdcontext.layer: "0"
+      com.clawdcontext.component: "dashboard"
+
+networks:
+  platform-net:
+    driver: bridge

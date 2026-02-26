@@ -131,6 +131,17 @@ run_setup() {
   chmod +x tools/ccos-* security/signing/*.sh red-team/*.sh 2>/dev/null || true
   success "Scripts made executable"
   
+  # Create .env from example if needed
+  if [[ ! -f ".env" ]]; then
+    if [[ -f ".env.example" ]]; then
+      cp .env.example .env
+      success ".env created from .env.example (mock LLM — no API key needed)"
+      info "Edit .env to add your DeepSeek/OpenAI key for live LLM responses"
+    fi
+  else
+    success ".env already exists"
+  fi
+  
   # Generate Ed25519 keys
   if [[ ! -d "security/signing/keys" ]]; then
     if command -v openssl &>/dev/null; then
@@ -157,21 +168,33 @@ run_scan() {
 
 # ── Docker Stack ────────────────────────────────────────────────
 start_docker() {
-  step 6 "Docker stack"
+  step 6 "Docker platform"
   
   if $HAVE_COMPOSE; then
-    read -r -p "  Start Docker stack? (sandbox + observability) [y/N] " answer
+    info "Building platform services (AgentProxy, Scanner, FlightRecorder, Dashboard)..."
+    docker compose -f docker-compose.platform.yml build 2>&1 | tail -5 | while IFS= read -r line; do info "$line"; done
+    success "Platform images built"
+
+    info "Starting platform stack..."
+    docker compose -f docker-compose.platform.yml up -d 2>&1 | while IFS= read -r line; do info "$line"; done
+    success "Platform running"
+
+    info "Dashboard:     ${BOLD}http://localhost:3000${NC}"
+    info "AgentProxy:    http://localhost:8400"
+    info "Scanner API:   http://localhost:8401"
+    info "FlightRecorder:http://localhost:8402"
+
+    echo ""
+    read -r -p "  Also start observability stack? (Prometheus + Grafana + Loki) [y/N] " answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
       docker compose up -d 2>&1 | while IFS= read -r line; do info "$line"; done
-      success "Stack running"
-      info "Grafana:    http://localhost:3000 (admin/clawdcontext)"
-      info "Prometheus: http://localhost:9090"
-    else
-      info "Skipped. Run 'make up' later to start."
+      success "Observability running"
+      info "Grafana:       http://localhost:3001 (admin/clawdcontext)"
+      info "Prometheus:    http://localhost:9090"
     fi
   else
-    info "Docker not available — skipping stack startup"
-    info "Install Docker to enable sandbox + observability"
+    info "Docker not available — skipping platform startup"
+    info "Install Docker to enable the full OS stack"
   fi
 }
 
@@ -208,16 +231,18 @@ summary() {
   echo -e "${CYAN}║${NC}    make cer       → Context Efficiency Ratio          ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}    make sign      → Ed25519 sign skills               ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}    make red-team  → 22 attack simulations             ${CYAN}║${NC}"
-  echo -e "${CYAN}║${NC}    make up        → Start Docker stack                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    make up        → Start platform + Docker stack     ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}    make help      → All available commands            ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}                                                      ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}  ${BOLD}Security Layers:${NC}                                     ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}    ${GREEN}■${NC} Layer 1  Design Time Scanner     ${GREEN}ACTIVE${NC}         ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}    ${GREEN}■${NC} Layer 2  ClawdSign (Ed25519)      ${GREEN}ACTIVE${NC}         ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}    ${GREEN}■${NC} Layer 3  Docker Sandbox           ${GREEN}ACTIVE${NC}         ${CYAN}║${NC}"
-  echo -e "${CYAN}║${NC}    ${YELLOW}■${NC} Layer 4  AgentProxy               ${YELLOW}NEXT${NC}           ${CYAN}║${NC}"
-  echo -e "${CYAN}║${NC}    ${DIM}■${NC} Layer 5  FlightRecorder            ${DIM}PLANNED${NC}        ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${GREEN}■${NC} Layer 4  AgentProxy               ${GREEN}ACTIVE${NC}         ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${GREEN}■${NC} Layer 5  FlightRecorder           ${GREEN}ACTIVE${NC}         ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}    ${DIM}■${NC} Layer 6  SnapshotEngine            ${DIM}PLANNED${NC}        ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                      ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}Dashboard:${NC} ${CYAN}http://localhost:3000${NC}                     ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}                                                      ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}  ${DIM}https://github.com/ClawdContextOS/starter-stack${NC}    ${CYAN}║${NC}"
   echo -e "${CYAN}║${NC}  ${DIM}https://clawdcontext.com${NC}                            ${CYAN}║${NC}"
@@ -265,14 +290,21 @@ fi
 # Support --non-interactive (for VS Code extension integration)
 if [[ "${1:-}" == "--non-interactive" ]]; then
   shift
-  HAVE_DOCKER=false
-  HAVE_COMPOSE=false
   HAVE_VSCODE=false
   
   banner
   
   # Minimal preflight
   command -v git &>/dev/null || fail "git not found"
+  
+  # Check Docker
+  if command -v docker &>/dev/null && docker compose version &>/dev/null; then
+    HAVE_DOCKER=true
+    HAVE_COMPOSE=true
+  else
+    HAVE_DOCKER=false
+    HAVE_COMPOSE=false
+  fi
   
   TARGET="${1:-$(pwd)/clawdcontext-os}"
   
@@ -283,8 +315,23 @@ if [[ "${1:-}" == "--non-interactive" ]]; then
   cd "$TARGET"
   chmod +x tools/ccos-* security/signing/*.sh red-team/*.sh 2>/dev/null || true
   
+  # Create .env from example if needed
+  if [[ ! -f ".env" ]] && [[ -f ".env.example" ]]; then
+    cp .env.example .env
+    success ".env created (mock LLM mode)"
+  fi
+  
   if command -v openssl &>/dev/null; then
     bash security/signing/keygen.sh security/signing/keys 2>/dev/null || true
+  fi
+  
+  # Build and start platform
+  if $HAVE_COMPOSE; then
+    info "Building platform services..."
+    docker compose -f docker-compose.platform.yml build 2>&1 | tail -5
+    info "Starting platform..."
+    docker compose -f docker-compose.platform.yml up -d 2>&1
+    success "Platform running — Dashboard: http://localhost:3000"
   fi
   
   summary

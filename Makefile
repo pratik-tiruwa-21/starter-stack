@@ -91,20 +91,48 @@ audit-critical: ## Show only critical audit entries
 audit-verify: ## Verify audit chain integrity
 	@bash tools/ccos-audit --verify
 
-# === Docker Stack ===
+# === Platform Stack (AgentProxy + Scanner + FlightRecorder + OpenClaw + Dashboard) ===
 
-up: ## Start full stack (sandbox + observability)
+platform-up: ## Start platform services (requires .env — see .env.example)
+	@if [ ! -f .env ]; then \
+		echo "  Creating .env from .env.example (mock LLM — no API key needed)..."; \
+		cp .env.example .env; \
+	fi
+	@docker compose -f docker-compose.platform.yml up -d --build
+	@echo ""
+	@echo "╔═══════════════════════════════════════════╗"
+	@echo "║  ClawdContext OS — Platform Running       ║"
+	@echo "╠═══════════════════════════════════════════╣"
+	@echo "║  Dashboard:      http://localhost:3000    ║"
+	@echo "║  AgentProxy:     http://localhost:8400    ║"
+	@echo "║  Scanner API:    http://localhost:8401    ║"
+	@echo "║  FlightRecorder: http://localhost:8402    ║"
+	@echo "║  OpenClaw:       http://localhost:8403    ║"
+	@echo "╚═══════════════════════════════════════════╝"
+
+platform-down: ## Stop platform services
+	@docker compose -f docker-compose.platform.yml down
+
+platform-logs: ## Follow platform logs
+	@docker compose -f docker-compose.platform.yml logs -f
+
+platform-status: ## Show platform container status
+	@docker compose -f docker-compose.platform.yml ps
+
+# === Docker Stack (sandbox + observability) ===
+
+up: ## Start sandbox + observability stack
 	@docker compose up -d
 	@echo ""
 	@echo "Stack running:"
 	@echo "  Sandbox:    docker exec -it ccos-agent-sandbox bash"
-	@echo "  Grafana:    http://localhost:3000 (admin/clawdcontext)"
+	@echo "  Grafana:    http://localhost:3001 (admin/clawdcontext)"
 	@echo "  Prometheus: http://localhost:9090"
 
-down: ## Stop all containers
+down: ## Stop all containers (sandbox + observability)
 	@docker compose down
 
-logs: ## Follow container logs
+logs: ## Follow sandbox + observability logs
 	@docker compose logs -f
 
 status: ## Show container status
@@ -122,6 +150,7 @@ obs-down: ## Stop observability stack
 # === Cleanup ===
 
 clean: ## Remove generated files and containers
+	@docker compose -f docker-compose.platform.yml down -v 2>/dev/null || true
 	@docker compose down -v 2>/dev/null || true
 	@docker compose -f observability/docker-compose.obs.yaml down -v 2>/dev/null || true
 	@rm -rf security/signing/keys/
@@ -133,5 +162,5 @@ all: setup scan cer check ## Run full pipeline: setup → scan → cer → check
 	@echo ""
 	@echo "╔══════════════════════════════════════════╗"
 	@echo "║   Full pipeline complete!                ║"
-	@echo "║   Next: make red-team                    ║"
+	@echo "║   Next: make platform-up  or  make red-team║"
 	@echo "╚══════════════════════════════════════════╝"
