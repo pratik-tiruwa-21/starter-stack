@@ -1,0 +1,99 @@
+# ClawdContext OS — Observability Stack
+# Layer 5: FlightRecorder
+#
+# Prometheus (metrics) + Grafana (dashboards) + Loki (logs)
+#
+# Usage: docker compose -f observability/docker-compose.obs.yaml up -d
+# Access: Grafana at http://localhost:3000 (admin/clawdcontext)
+
+services:
+
+  # === Prometheus — Metrics Collection ===
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: ccos-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+    networks:
+      - obs-net
+    labels:
+      com.clawdcontext.layer: "5"
+      com.clawdcontext.component: "prometheus"
+
+  # === Grafana — Dashboard Visualization ===
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: ccos-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=clawdcontext
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/cer-dashboard.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+    networks:
+      - obs-net
+    labels:
+      com.clawdcontext.layer: "5"
+      com.clawdcontext.component: "grafana"
+
+  # === Loki — Log Aggregation ===
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: ccos-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+    networks:
+      - obs-net
+    labels:
+      com.clawdcontext.layer: "5"
+      com.clawdcontext.component: "loki"
+
+  # === Promtail — Log Shipper ===
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: ccos-promtail
+    volumes:
+      - /var/log:/var/log:ro
+      - ./promtail.yaml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+    networks:
+      - obs-net
+    labels:
+      com.clawdcontext.layer: "5"
+      com.clawdcontext.component: "promtail"
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+
+networks:
+  obs-net:
+    driver: bridge

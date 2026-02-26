@@ -1,0 +1,208 @@
+# ClawdContext OS — Scanner Configuration
+# Layer 1: Design-Time Security Scanner
+# 14 pattern categories from ClawHavoc / VirusTotal TTP research
+
+scanner:
+  version: "1.0.0"
+  name: "ccos-scan"
+
+  # Files to scan (glob patterns)
+  include:
+    - "agent/**/*.md"
+    - "agent/**/*.yaml"
+    - "agent/**/*.yml"
+    - "agent/**/*.json"
+    - "**/*.sh"
+    - "**/*.py"
+    - "**/*.js"
+    - "**/*.ts"
+
+  # Files to skip
+  exclude:
+    - "node_modules/**"
+    - ".git/**"
+    - "red-team/**"  # Red-team scripts are expected to contain patterns
+    - "security/scanner.config.yaml"  # This file references patterns
+
+  # Severity thresholds
+  thresholds:
+    critical: 0    # Zero tolerance — any CRITICAL blocks deployment
+    high: 3        # Up to 3 HIGH findings allowed (with justification)
+    medium: 10     # Up to 10 MEDIUM findings allowed
+    low: 50        # Informational
+
+  # Exit codes
+  exit_codes:
+    clean: 0
+    findings: 1
+    error: 2
+
+# Pattern Categories (14 total)
+# Each pattern has: id, name, severity, description, regex patterns
+patterns:
+
+  # === CRITICAL: Immediate threats ===
+
+  - id: "CC-001"
+    name: "data-exfiltration"
+    severity: CRITICAL
+    description: "Outbound data transfer with sensitive variables"
+    patterns:
+      - 'curl.*\$\{?(OPENAI_API_KEY|AWS_SECRET|GITHUB_TOKEN|API_KEY|SECRET)'
+      - 'wget.*\$\{?(OPENAI_API_KEY|AWS_SECRET|GITHUB_TOKEN|API_KEY|SECRET)'
+      - 'fetch\(.*\$\{?(OPENAI_API_KEY|AWS_SECRET|GITHUB_TOKEN|API_KEY|SECRET)'
+      - 'requests\.(get|post).*\$\{?(OPENAI_API_KEY|AWS_SECRET|GITHUB_TOKEN)'
+
+  - id: "CC-002"
+    name: "obfuscated-eval"
+    severity: CRITICAL
+    description: "Encoded/obfuscated command execution"
+    patterns:
+      - 'eval\s*\$\(.*base64'
+      - 'echo.*\|\s*base64\s*-d\s*\|\s*(sh|bash|zsh)'
+      - 'python.*-c.*exec\(.*decode'
+      - 'node.*-e.*eval\(Buffer\.from'
+      - 'atob\(.*\)\s*;?\s*eval'
+
+  - id: "CC-003"
+    name: "credential-harvesting"
+    severity: CRITICAL
+    description: "Accessing credential stores and secret files"
+    patterns:
+      - '~/\.ssh/(id_rsa|id_ed25519|authorized_keys)'
+      - '~/\.aws/(credentials|config)'
+      - '~/\.gnupg/'
+      - '(cat|tar|cp|scp).*\.(env|env\.local|env\.production)'
+      - '\*\*/\.\*secret\*'
+      - '\*\*\/\*_KEY\*'
+
+  - id: "CC-004"
+    name: "prompt-injection"
+    severity: CRITICAL
+    description: "Attempts to override system instructions"
+    patterns:
+      - '[Ii]gnore\s+(all\s+)?previous\s+instructions'
+      - '[Yy]ou\s+are\s+now\s+(operating|running)\s+in\s+maintenance'
+      - '[Nn]ew\s+primary\s+directive'
+      - 'SYSTEM\s*(UPDATE|OVERRIDE|PATCH)'
+      - '[Dd]isable\s+(all\s+)?safety\s+checks'
+      - '[Oo]utput\s+(the\s+)?contents?\s+of\s+(all\s+)?\.env'
+
+  - id: "CC-005"
+    name: "container-escape"
+    severity: CRITICAL
+    description: "Docker/container breakout attempts"
+    patterns:
+      - 'docker.*-H\s+unix:///var/run/docker\.sock'
+      - 'nsenter\s+--target\s+1'
+      - 'chroot\s+/host'
+      - 'mount\s+-t\s+cgroup'
+      - '/proc/[0-9]+/root'
+      - '--privileged'
+
+  - id: "CC-006"
+    name: "persistence"
+    severity: CRITICAL
+    description: "Establishing persistent access or C2 channels"
+    patterns:
+      - 'crontab'
+      - '\.bashrc|\.zshrc|\.profile.*curl'
+      - 'systemctl\s+enable'
+      - '/etc/rc\.local'
+      - 'beacon|c2|callback'
+      - 'reverse.shell|rev.*shell'
+
+  # === HIGH: Significant risks ===
+
+  - id: "CC-007"
+    name: "supply-chain-confusion"
+    severity: HIGH
+    description: "Typosquatted or suspicious package installations"
+    patterns:
+      - 'npm\s+install.*(optimzer|colros|loadsh|requst|axois)'
+      - 'pip\s+install.*(systm|reqeusts|crytpo)'
+      - 'install.*--force|--no-verify'
+
+  - id: "CC-008"
+    name: "wildcard-capabilities"
+    severity: HIGH
+    description: "Overly broad capability grants in YAML frontmatter"
+    patterns:
+      - 'capabilities:.*\*\*'
+      - 'file_read:\*\*'
+      - 'file_write:\*\*'
+      - 'net:\*'
+      - 'exec:\*'
+
+  - id: "CC-009"
+    name: "forged-signatures"
+    severity: HIGH
+    description: "Signatures that don't match expected format"
+    patterns:
+      - 'signature:\s*"FORGED'
+      - 'signature:\s*"fake'
+      - 'signature:\s*"test'
+      - 'signed_by:\s*"trusted-authority"'  # Known test value
+
+  - id: "CC-010"
+    name: "excessive-permissions"
+    severity: HIGH
+    description: "Unreasonable rate limits or token budgets"
+    patterns:
+      - 'rate_limit:\s*[0-9]{5,}'  # 5+ digit rate limits
+      - 'token_budget:\s*[0-9]{5,}'  # 5+ digit budgets
+      - 'timeout:\s*0\b'  # No timeout = infinite
+
+  # === MEDIUM: Suspicious patterns ===
+
+  - id: "CC-011"
+    name: "network-access"
+    severity: MEDIUM
+    description: "Network calls that may or may not be authorized"
+    patterns:
+      - 'curl\s+-s'
+      - 'wget\s+-q'
+      - 'fetch\('
+      - 'requests\.(get|post)'
+      - 'http\.request'
+
+  - id: "CC-012"
+    name: "file-system-traversal"
+    severity: MEDIUM
+    description: "Path traversal or access outside workspace"
+    patterns:
+      - '\.\./\.\.'
+      - '/etc/(passwd|shadow|hosts)'
+      - '/proc/self'
+      - '/tmp/\.'  # Hidden temp files
+
+  - id: "CC-013"
+    name: "information-disclosure"
+    severity: MEDIUM
+    description: "Potential information leakage patterns"
+    patterns:
+      - 'console\.log.*password'
+      - 'print.*secret'
+      - 'echo.*\$.*KEY'
+      - 'debug.*credential'
+
+  # === LOW: Informational ===
+
+  - id: "CC-014"
+    name: "code-execution"
+    severity: LOW
+    description: "General code execution patterns (may be legitimate)"
+    patterns:
+      - 'eval\('
+      - 'exec\('
+      - 'subprocess\.(run|call|Popen)'
+      - 'child_process\.(exec|spawn)'
+      - '\bsh\s+-c\b'
+
+# Reporting
+reporting:
+  format: "table"  # table | json | sarif
+  output: "stdout"
+  include_line_numbers: true
+  include_context: true
+  context_lines: 2  # Lines before/after match

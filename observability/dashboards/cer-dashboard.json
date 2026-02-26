@@ -1,0 +1,182 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "CER Gauge — Context Efficiency Ratio",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#FF3D71", "value": null },
+              { "color": "#FF3D71", "value": 0 },
+              { "color": "#FFB300", "value": 0.3 },
+              { "color": "#00E676", "value": 0.6 },
+              { "color": "#00E5FF", "value": 0.8 }
+            ]
+          },
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit"
+        }
+      },
+      "targets": [
+        {
+          "expr": "ccos_cer_ratio",
+          "legendFormat": "CER",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      }
+    },
+    {
+      "title": "CER Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#FF3D71", "value": null },
+              { "color": "#FFB300", "value": 0.3 },
+              { "color": "#00E676", "value": 0.6 }
+            ]
+          },
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit"
+        }
+      },
+      "targets": [
+        {
+          "expr": "ccos_cer_ratio",
+          "legendFormat": "CER",
+          "refId": "A"
+        },
+        {
+          "expr": "ccos_useful_tokens / ccos_total_tokens",
+          "legendFormat": "Computed CER",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Token Breakdown",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "ccos_useful_tokens", "legendFormat": "Useful", "refId": "A" },
+        { "expr": "ccos_total_tokens - ccos_useful_tokens", "legendFormat": "Overhead", "refId": "B" }
+      ],
+      "options": {
+        "pieType": "donut",
+        "legend": { "displayMode": "table", "placement": "right" }
+      }
+    },
+    {
+      "title": "Skills Loaded",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "ccos_skills_loaded", "legendFormat": "Skills", "refId": "A" }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "#00E676", "value": null },
+              { "color": "#FFB300", "value": 3 },
+              { "color": "#FF3D71", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Total Tokens",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "ccos_total_tokens", "legendFormat": "Tokens", "refId": "A" }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "title": "Lessons in Cache",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "ccos_lessons_count", "legendFormat": "Lessons", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "#00E676", "value": null },
+              { "color": "#FFB300", "value": 15 },
+              { "color": "#FF3D71", "value": 20 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Token Usage Over Time (by category)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "stacking": { "mode": "normal" }, "fillOpacity": 40 }
+        }
+      },
+      "targets": [
+        { "expr": "ccos_tokens_kernel", "legendFormat": "Kernel (CLAUDE.md)", "refId": "A" },
+        { "expr": "ccos_tokens_skills", "legendFormat": "Skills", "refId": "B" },
+        { "expr": "ccos_tokens_lessons", "legendFormat": "Lessons", "refId": "C" },
+        { "expr": "ccos_tokens_todo", "legendFormat": "Todo", "refId": "D" },
+        { "expr": "ccos_tokens_output", "legendFormat": "Output", "refId": "E" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["clawdcontext", "cer", "agent"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ClawdContext OS — CER Dashboard",
+  "uid": "ccos-cer",
+  "version": 1
+}

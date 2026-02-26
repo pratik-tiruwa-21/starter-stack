@@ -1,0 +1,41 @@
+# Keys and secrets
+*.key
+*.pem
+*.p12
+*.pfx
+security/signing/keys/
+.env
+.env.*
+
+# OS and editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Docker volumes
+prometheus-data/
+grafana-data/
+loki-data/
+
+# Agent output
+agent-output/
+output/
+search-results.md
+
+# Build artifacts
+node_modules/
+dist/
+*.tar.gz
+*.zip
+
+# Logs
+*.log
+audit.log
+
+# Temporary files
+/tmp/
+.tmp/

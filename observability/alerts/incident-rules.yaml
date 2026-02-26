@@ -1,0 +1,131 @@
+# ClawdContext OS — Incident Alert Rules
+# Layer 5: FlightRecorder
+#
+# Critical event escalation — these rules indicate active threats
+# or security policy violations requiring immediate attention.
+
+groups:
+  - name: ccos-incidents
+    interval: 10s
+    rules:
+
+      # === Active Threats ===
+
+      - alert: Data_Exfiltration_Attempt
+        expr: increase(ccos_scanner_findings_total{pattern="data-exfiltration"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          layer: "1"
+          pattern: "CC-001"
+        annotations:
+          summary: "Data exfiltration pattern detected"
+          description: |
+            Scanner found outbound data transfer with sensitive variables.
+            Pattern CC-001: curl/wget/fetch with env var references.
+            IMMEDIATE ACTION: Block skill, quarantine workspace, review logs.
+          runbook: "https://github.com/openclawos/starter-stack#incident-response"
+
+      - alert: Prompt_Injection_Detected
+        expr: increase(ccos_scanner_findings_total{pattern="prompt-injection"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          layer: "1"
+          pattern: "CC-004"
+        annotations:
+          summary: "Prompt injection attempt detected"
+          description: |
+            Scanner found system instruction override attempt.
+            Pattern CC-004: "ignore previous instructions" or similar.
+            IMMEDIATE ACTION: Reject skill, log full context, alert human.
+
+      - alert: Container_Escape_Attempt
+        expr: increase(ccos_scanner_findings_total{pattern="container-escape"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          layer: "3"
+          pattern: "CC-005"
+        annotations:
+          summary: "Container escape attempt detected"
+          description: |
+            Scanner found Docker socket access, nsenter, or cgroup manipulation.
+            Pattern CC-005: Privilege escalation beyond sandbox boundary.
+            IMMEDIATE ACTION: Kill sandbox, snapshot state, escalate to human.
+
+      - alert: Forged_Signature_Detected
+        expr: increase(ccos_scanner_findings_total{pattern="forged-signatures"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: high
+          layer: "2"
+          pattern: "CC-009"
+        annotations:
+          summary: "Forged skill signature detected"
+          description: |
+            A skill has a signature that fails cryptographic verification.
+            This could be a supply chain attack or tampered skill bundle.
+            ACTION: Quarantine skill, verify provenance, re-sign from trusted source.
+
+      # === Policy Violations ===
+
+      - alert: Capability_Violation
+        expr: rate(ccos_policy_violations_total{policy="capabilities"}[1m]) > 0
+        for: 0m
+        labels:
+          severity: high
+          layer: "4"
+        annotations:
+          summary: "Skill attempted unauthorized action"
+          description: "A skill tried to perform an action outside its declared capabilities. AgentProxy blocked the request."
+
+      - alert: Flow_Control_Violation
+        expr: rate(ccos_policy_violations_total{policy="flow_control"}[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          layer: "4"
+        annotations:
+          summary: "Bell-LaPadula information flow violation"
+          description: |
+            An untrusted skill attempted to read classified data (No Read Up)
+            or write classified data to a public channel (No Write Down).
+            This is the most serious policy violation — indicates potential
+            credential exfiltration or data leakage.
+
+      - alert: Kernel_Modification_Attempt
+        expr: increase(ccos_kernel_modification_attempts[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          layer: "1"
+        annotations:
+          summary: "CLAUDE.md modification attempted — KERNEL PANIC"
+          description: |
+            An agent or skill tried to modify CLAUDE.md (the kernel).
+            This is a non-negotiable violation. All agents should be halted.
+            The kernel is immutable at runtime — this is the root of trust.
+            IMMEDIATE ACTION: Halt all agents, review audit log, restart from clean state.
+
+      # === System Health ===
+
+      - alert: Sandbox_Down
+        expr: up{job="ccos-agent-metrics"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          layer: "3"
+        annotations:
+          summary: "Agent sandbox not responding"
+          description: "The agent sandbox container has been unreachable for 2+ minutes."
+
+      - alert: Observability_Stack_Down
+        expr: up{job="ccos-proxy-metrics"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          layer: "5"
+        annotations:
+          summary: "AgentProxy metrics endpoint unreachable"
+          description: "Cannot collect metrics from AgentProxy. FlightRecorder has blind spots."

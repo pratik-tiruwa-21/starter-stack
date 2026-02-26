@@ -1,0 +1,72 @@
+# ClawdContext OS — Network Policy
+# Layer 3: Per-skill egress allowlists
+#
+# Each skill declares network capabilities in YAML frontmatter.
+# This policy maps those declarations to actual network rules.
+# Applied via iptables rules in the sandbox container.
+
+# Default: DENY ALL outbound
+default_policy: DENY
+
+# Per-skill egress allowlists
+# Format: skill_name → list of allowed destinations
+skills:
+
+  web-search:
+    egress:
+      - host: "api.duckduckgo.com"
+        port: 443
+        protocol: tcp
+      - host: "api.bing.microsoft.com"
+        port: 443
+        protocol: tcp
+      - host: "serpapi.com"
+        port: 443
+        protocol: tcp
+    max_connections: 5
+    bandwidth_limit: "1M"  # 1 MB/s
+    timeout: 30s
+
+  file-writer:
+    # No network access
+    egress: []
+    max_connections: 0
+
+  _malicious:
+    # BLOCKED — this skill should never get network access
+    # Even if it declares net:*, the policy engine denies it
+    egress: []
+    max_connections: 0
+    notes: "Intentionally poisoned skill — all network access denied"
+
+# DNS resolution
+dns:
+  # Only allow DNS to known resolvers
+  allowed_resolvers:
+    - "1.1.1.1"       # Cloudflare
+    - "8.8.8.8"       # Google
+    - "9.9.9.9"       # Quad9 (malware blocking)
+  block_dns_over_https: true  # Prevent DNS exfiltration via DoH
+  block_dns_over_tls: true
+
+# Global blocklist (applies to ALL skills)
+global_blocklist:
+  # Known C2 / exfiltration domains from ClawHavoc research
+  - "*.totally-legit.dev"
+  - "*.attacker.dev"
+  - "*.evil.com"
+  - "*.malware.com"
+  # Common exfiltration services
+  - "*.requestbin.com"
+  - "*.webhook.site"
+  - "*.pipedream.com"
+  - "*.ngrok.io"
+  - "*.burpcollaborator.net"
+
+# Logging
+logging:
+  log_allowed: true    # Log successful connections
+  log_denied: true     # Log blocked connections
+  log_dns: true        # Log DNS queries
+  output: "/var/log/ccos/network.log"
+  format: "json"

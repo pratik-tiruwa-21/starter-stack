@@ -1,0 +1,118 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "6-Layer Security Status",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "ccos_layer_status", "legendFormat": "{{layer}}", "refId": "A", "format": "table", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center" },
+          "thresholds": {
+            "steps": [
+              { "color": "#FF3D71", "value": null },
+              { "color": "#FFB300", "value": 50 },
+              { "color": "#00E676", "value": 80 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "layer" },
+            "properties": [{ "id": "custom.width", "value": 200 }]
+          }
+        ]
+      },
+      "transformations": [
+        { "id": "organize", "options": { "renameByName": { "layer": "Security Layer", "Value": "Score" } } }
+      ]
+    },
+    {
+      "title": "Security Score (Aggregate)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "avg(ccos_layer_status)", "legendFormat": "Aggregate", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100, "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "#FF3D71", "value": null },
+              { "color": "#FFB300", "value": 50 },
+              { "color": "#00E676", "value": 80 },
+              { "color": "#00E5FF", "value": 95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Scanner Findings (Last 24h)",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum by (severity) (increase(ccos_scanner_findings_total[24h]))", "legendFormat": "{{severity}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "CRITICAL" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF3D71", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "HIGH" }, "properties": [{ "id": "color", "value": { "fixedColor": "#FFB300", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "MEDIUM" }, "properties": [{ "id": "color", "value": { "fixedColor": "#00E5FF", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "LOW" }, "properties": [{ "id": "color", "value": { "fixedColor": "#888888", "mode": "fixed" } }] }
+        ]
+      }
+    },
+    {
+      "title": "Signature Verification Status",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "ccos_skills_signed", "legendFormat": "Signed", "refId": "A" },
+        { "expr": "ccos_skills_unsigned", "legendFormat": "Unsigned", "refId": "B" },
+        { "expr": "ccos_skills_forged", "legendFormat": "Forged", "refId": "C" }
+      ],
+      "options": { "pieType": "donut" }
+    },
+    {
+      "title": "Policy Violations Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(ccos_policy_violations_total{policy=\"capabilities\"}[5m])", "legendFormat": "Capability Violations", "refId": "A" },
+        { "expr": "rate(ccos_policy_violations_total{policy=\"rate_limits\"}[5m])", "legendFormat": "Rate Limit Hits", "refId": "B" },
+        { "expr": "rate(ccos_policy_violations_total{policy=\"flow_control\"}[5m])", "legendFormat": "Flow Control Blocks", "refId": "C" }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 15 } }
+      }
+    },
+    {
+      "title": "Sandbox Events",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "expr": "{job=\"ccos-agent\"} |= \"SECURITY\"", "refId": "A" }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["clawdcontext", "security"],
+  "time": { "from": "now-24h", "to": "now" },
+  "title": "ClawdContext OS — Security Score",
+  "uid": "ccos-security",
+  "version": 1
+}

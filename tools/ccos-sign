@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# ccos-sign — ClawdContext OS Skill Signer
+# Layer 2: ClawdSign (Ed25519)
+#
+# Wrapper around security/signing/verify.sh for common operations.
+#
+# Usage:
+#   ccos-sign init                      — Generate keypair
+#   ccos-sign sign <skill_dir>          — Sign a skill
+#   ccos-sign verify <skill_dir>        — Verify a skill
+#   ccos-sign check                      — Check all skills
+
+set -euo pipefail
+
+COMMAND="${1:-help}"
+TARGET="${2:-}"
+KEYS_DIR="security/signing/keys"
+PRIVATE_KEY="$KEYS_DIR/private.key"
+PUBLIC_KEY="$KEYS_DIR/public.key"
+VERIFY_SCRIPT="security/signing/verify.sh"
+KEYGEN_SCRIPT="security/signing/keygen.sh"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+echo ""
+echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}║   ClawdContext OS — Skill Signer         ║${NC}"
+echo -e "${BOLD}║   Layer 2: ClawdSign (Ed25519)           ║${NC}"
+echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
+
+check_scripts() {
+    if [[ ! -f "$VERIFY_SCRIPT" ]]; then
+        echo -e "${RED}ERROR: $VERIFY_SCRIPT not found. Are you in the repo root?${NC}"
+        exit 1
+    fi
+}
+
+case "$COMMAND" in
+    init)
+        echo ""
+        echo "Generating Ed25519 keypair..."
+        if [[ -f "$KEYGEN_SCRIPT" ]]; then
+            bash "$KEYGEN_SCRIPT" "$KEYS_DIR"
+        else
+            echo -e "${RED}ERROR: $KEYGEN_SCRIPT not found${NC}"
+            exit 1
+        fi
+        ;;
+
+    sign)
+        check_scripts
+        if [[ -z "$TARGET" ]]; then
+            # Sign all skills
+            echo ""
+            echo "Signing all skills in agent/skills/..."
+            for skill_dir in agent/skills/*/; do
+                skill_name=$(basename "$skill_dir")
+                if [[ "$skill_name" == "_malicious" ]]; then
+                    echo -e "  ${YELLOW}⚠ Skipping _malicious (intentionally unsigned)${NC}"
+                    continue
+                fi
+                if [[ -f "$skill_dir/SKILL.md" ]]; then
+                    bash "$VERIFY_SCRIPT" sign "$skill_dir" "$PRIVATE_KEY"
+                fi
+            done
+        else
+            bash "$VERIFY_SCRIPT" sign "$TARGET" "$PRIVATE_KEY"
+        fi
+        ;;
+
+    verify)
+        check_scripts
+        if [[ -z "$TARGET" ]]; then
+            echo -e "${RED}Usage: ccos-sign verify <skill_dir>${NC}"
+            exit 1
+        fi
+        bash "$VERIFY_SCRIPT" verify "$TARGET" "$PUBLIC_KEY"
+        ;;
+
+    check)
+        check_scripts
+        echo ""
+        bash "$VERIFY_SCRIPT" check "agent/skills" "$PUBLIC_KEY"
+        ;;
+
+    *)
+        echo ""
+        echo "Usage:"
+        echo "  ccos-sign init             Generate Ed25519 keypair"
+        echo "  ccos-sign sign [dir]       Sign a skill (or all skills)"
+        echo "  ccos-sign verify <dir>     Verify a skill signature"
+        echo "  ccos-sign check            Check all skills in agent/skills/"
+        echo ""
+        echo "Examples:"
+        echo "  ccos-sign init"
+        echo "  ccos-sign sign agent/skills/web-search"
+        echo "  ccos-sign sign              # signs all (except _malicious)"
+        echo "  ccos-sign check"
+        ;;
+esac

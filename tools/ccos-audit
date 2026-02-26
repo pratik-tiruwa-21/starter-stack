@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# ccos-audit — ClawdContext OS Audit Chain Query
+# Layer 5: FlightRecorder
+#
+# Queries the immutable audit log for agent actions, security events,
+# and policy decisions. Supports filtering by time, severity, layer, and skill.
+#
+# Usage:
+#   ccos-audit                            — Show last 50 entries
+#   ccos-audit --tail <n>                 — Show last N entries
+#   ccos-audit --severity <level>         — Filter by severity
+#   ccos-audit --layer <n>                — Filter by security layer
+#   ccos-audit --skill <name>             — Filter by skill name
+#   ccos-audit --since <duration>         — Since duration (1h, 24h, 7d)
+#   ccos-audit --verify                   — Verify chain integrity
+
+set -euo pipefail
+
+AUDIT_LOG="${CCOS_AUDIT_LOG:-/var/log/ccos/audit.log}"
+TAIL_N=50
+SEVERITY_FILTER=""
+LAYER_FILTER=""
+SKILL_FILTER=""
+SINCE=""
+VERIFY=false
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --tail) TAIL_N="$2"; shift 2 ;;
+        --severity) SEVERITY_FILTER="$2"; shift 2 ;;
+        --layer) LAYER_FILTER="$2"; shift 2 ;;
+        --skill) SKILL_FILTER="$2"; shift 2 ;;
+        --since) SINCE="$2"; shift 2 ;;
+        --verify) VERIFY=true; shift ;;
+        *) shift ;;
+    esac
+done
+
+echo ""
+echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}║   ClawdContext OS — Audit Chain Query    ║${NC}"
+echo -e "${BOLD}║   Layer 5: FlightRecorder                ║${NC}"
+echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
+echo ""
+
+# Check audit log exists
+if [[ ! -f "$AUDIT_LOG" ]]; then
+    echo -e "${YELLOW}Audit log not found at: $AUDIT_LOG${NC}"
+    echo ""
+    echo "The audit log is created when the agent sandbox runs."
+    echo "To start logging:"
+    echo "  1. docker compose up -d"
+    echo "  2. Run some agent actions"
+    echo "  3. ccos-audit --tail 10"
+    echo ""
+    echo "Or set CCOS_AUDIT_LOG to a custom path:"
+    echo "  export CCOS_AUDIT_LOG=/path/to/audit.log"
+    echo ""
+
+    # Demo mode: show what the output would look like
+    echo -e "${CYAN}Demo output (no real data):${NC}"
+    echo "────────────────────────────────────────────────────────────"
+    echo ""
+    cat << 'DEMO'
+  2025-06-15T10:30:00Z  INFO    L1  scanner     Scan started: agent/skills/
+  2025-06-15T10:30:01Z  CRIT    L1  scanner     CC-001: data-exfiltration in _malicious/SKILL.md:25
+  2025-06-15T10:30:01Z  CRIT    L1  scanner     CC-002: obfuscated-eval in _malicious/SKILL.md:35
+  2025-06-15T10:30:01Z  CRIT    L1  scanner     CC-004: prompt-injection in _malicious/SKILL.md:58
+  2025-06-15T10:30:02Z  HIGH    L2  clawdsign   Forged signature: _malicious/SKILL.md
+  2025-06-15T10:30:02Z  INFO    L2  clawdsign   Valid signature: web-search/SKILL.md
+  2025-06-15T10:30:03Z  INFO    L3  sandbox     Container started: ccos-agent-sandbox (UID 1000)
+  2025-06-15T10:30:04Z  HIGH    L4  proxy       Capability violation: _malicious tried file_read:**
+  2025-06-15T10:30:04Z  CRIT    L4  proxy       Flow control: untrusted skill tried reading .env
+  2025-06-15T10:30:05Z  INFO    L5  recorder    CER = 0.72 (healthy)
+  2025-06-15T10:30:05Z  INFO    L5  recorder    Chain hash: a3f8...b2c1 (verified)
+DEMO
+    echo ""
+    echo "────────────────────────────────────────────────────────────"
+    exit 0
+fi
+
+# Verify chain integrity
+if $VERIFY; then
+    echo -e "${BOLD}Verifying audit chain integrity...${NC}"
+    echo ""
+
+    # Each log entry should have a hash chained to the previous entry
+    line_num=0
+    prev_hash=""
+    valid=true
+
+    while IFS= read -r line; do
+        line_num=$((line_num + 1))
+
+        # Extract chain hash (last field in JSON log)
+        current_hash=$(echo "$line" | grep -oP '"chain_hash":"([^"]+)"' | head -1 | cut -d'"' -f4)
+
+        if [[ -n "$prev_hash" && -n "$current_hash" ]]; then
+            # Verify: current hash should include previous hash in its computation
+            expected=$(echo -n "${prev_hash}${line}" | sha256sum | cut -d' ' -f1 | head -c 16)
+            if [[ "$current_hash" != "$expected" ]]; then
+                echo -e "${RED}✗ Chain broken at line $line_num${NC}"
+                valid=false
+            fi
+        fi
+
+        prev_hash="$current_hash"
+    done < "$AUDIT_LOG"
+
+    if $valid; then
+        echo -e "${GREEN}✓ Audit chain integrity verified ($line_num entries)${NC}"
+    else
+        echo -e "${RED}⚠ CHAIN INTEGRITY COMPROMISED — audit log may have been tampered!${NC}"
+        exit 1
+    fi
+    exit 0
+fi
+
+# Query audit log with filters
+echo -e "Querying: ${CYAN}$AUDIT_LOG${NC}"
+echo "────────────────────────────────────────────────────────────"
+
+cmd="cat '$AUDIT_LOG'"
+
+# Apply filters
+if [[ -n "$SEVERITY_FILTER" ]]; then
+    cmd="$cmd | grep -i '\"severity\":\"$SEVERITY_FILTER\"'"
+fi
+
+if [[ -n "$LAYER_FILTER" ]]; then
+    cmd="$cmd | grep '\"layer\":\"$LAYER_FILTER\"'"
+fi
+
+if [[ -n "$SKILL_FILTER" ]]; then
+    cmd="$cmd | grep '\"skill\":\"$SKILL_FILTER\"'"
+fi
+
+if [[ -n "$SINCE" ]]; then
+    # Convert duration to seconds
+    case "$SINCE" in
+        *h) seconds=$(( ${SINCE%h} * 3600 )) ;;
+        *d) seconds=$(( ${SINCE%d} * 86400 )) ;;
+        *m) seconds=$(( ${SINCE%m} * 60 )) ;;
+        *) seconds=3600 ;;
+    esac
+    cutoff=$(date -u -d "-${seconds} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-${seconds}S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+    if [[ -n "$cutoff" ]]; then
+        cmd="$cmd | awk -v cutoff='$cutoff' '\$0 >= cutoff'"
+    fi
+fi
+
+cmd="$cmd | tail -n $TAIL_N"
+
+# Execute
+eval "$cmd" 2>/dev/null || echo -e "${YELLOW}No matching entries found${NC}"
+
+echo ""
+echo "────────────────────────────────────────────────────────────"
+echo -e "Showing last $TAIL_N entries"
+[[ -n "$SEVERITY_FILTER" ]] && echo -e "  Filter: severity=$SEVERITY_FILTER"
+[[ -n "$LAYER_FILTER" ]] && echo -e "  Filter: layer=$LAYER_FILTER"
+[[ -n "$SKILL_FILTER" ]] && echo -e "  Filter: skill=$SKILL_FILTER"

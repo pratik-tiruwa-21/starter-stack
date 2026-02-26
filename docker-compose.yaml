@@ -1,0 +1,106 @@
+# ClawdContext OS — Full Stack Compose
+# Combines sandbox (Layer 3) + observability (Layer 5) into one stack.
+#
+# Usage:
+#   docker compose up -d                    — Start full stack
+#   docker compose --profile network up -d  — Include network-enabled sandbox
+#   docker compose down                     — Stop everything
+#   docker compose logs -f                  — Follow all logs
+
+services:
+
+  # === Layer 3: Agent Sandbox (isolated execution) ===
+  agent-sandbox:
+    image: python:3.12-slim
+    container_name: ccos-agent-sandbox
+    user: "1000:1000"
+    read_only: true
+    network_mode: "none"
+    volumes:
+      - ./agent:/workspace/agent:ro
+      - agent-output:/workspace/output
+    tmpfs:
+      - /tmp:size=64M,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=security/sandbox/seccomp-strict.json
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    working_dir: /workspace
+    command: ["python3", "-c", "print('ClawdContext OS Ready'); import time; time.sleep(86400)"]
+    restart: unless-stopped
+    labels:
+      com.clawdcontext.layer: "3"
+      com.clawdcontext.component: "sandbox"
+
+  # === Layer 5: Prometheus (metrics) ===
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: ccos-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    restart: unless-stopped
+    networks:
+      - obs-net
+    labels:
+      com.clawdcontext.layer: "5"
+
+  # === Layer 5: Grafana (dashboards) ===
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: ccos-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=clawdcontext
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/dashboards:/var/lib/grafana/dashboards:ro
+      - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./observability/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+    networks:
+      - obs-net
+    labels:
+      com.clawdcontext.layer: "5"
+
+  # === Layer 5: Loki (logs) ===
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: ccos-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    restart: unless-stopped
+    networks:
+      - obs-net
+    labels:
+      com.clawdcontext.layer: "5"
+
+volumes:
+  agent-output:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+
+networks:
+  obs-net:
+    driver: bridge

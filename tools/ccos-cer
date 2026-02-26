@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# ccos-cer — ClawdContext OS Context Efficiency Ratio Calculator
+# Eureka #3: Thermodynamics — CER = useful tokens / total tokens
+#
+# Approximates token count using BPE heuristic (words * 1.3).
+# Classifies tokens as useful (task-specific) or governance (overhead).
+#
+# Usage:
+#   ccos-cer [agent_dir]           — Calculate CER for agent workspace
+#   ccos-cer --what-if <skills>    — Simulate CER with N skills loaded
+#   ccos-cer --threshold <value>   — Custom CER threshold (default: 0.6)
+
+set -euo pipefail
+
+AGENT_DIR="${1:-agent}"
+THRESHOLD=0.6
+WHAT_IF=0
+
+# Colors
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --what-if) WHAT_IF="$2"; shift 2 ;;
+        --threshold) THRESHOLD="$2"; shift 2 ;;
+        *) AGENT_DIR="$1"; shift ;;
+    esac
+done
+
+echo ""
+echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}║   ClawdContext OS — CER Calculator       ║${NC}"
+echo -e "${BOLD}║   Eureka #3: Thermodynamics              ║${NC}"
+echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
+echo ""
+
+# Approximate token count: words * 1.3 (BPE heuristic)
+count_tokens() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        local words
+        words=$(wc -w < "$file" | tr -d ' ')
+        echo $(( words * 13 / 10 ))
+    else
+        echo 0
+    fi
+}
+
+# Count tokens in a directory
+count_dir_tokens() {
+    local dir="$1"
+    local total=0
+    if [[ -d "$dir" ]]; then
+        for f in "$dir"/*.md "$dir"/*.yaml "$dir"/*.yml "$dir"/*.json; do
+            if [[ -f "$f" ]]; then
+                local t
+                t=$(count_tokens "$f")
+                total=$((total + t))
+            fi
+        done
+    fi
+    echo $total
+}
+
+# Kernel tokens (always loaded — governance overhead)
+kernel_tokens=$(count_tokens "$AGENT_DIR/CLAUDE.md")
+agents_tokens=$(count_tokens "$AGENT_DIR/AGENTS.md")
+lessons_tokens=$(count_tokens "$AGENT_DIR/lessons.md")
+todo_tokens=$(count_tokens "$AGENT_DIR/todo.md")
+
+# Skill tokens (loaded on demand)
+skill_tokens=0
+skill_count=0
+if [[ -d "$AGENT_DIR/skills" ]]; then
+    for skill_dir in "$AGENT_DIR/skills"/*/; do
+        if [[ -f "$skill_dir/SKILL.md" ]]; then
+            local_tokens=$(count_tokens "$skill_dir/SKILL.md")
+            skill_name=$(basename "$skill_dir")
+            skill_count=$((skill_count + 1))
+
+            # Skip _malicious in normal calculation (it's for testing)
+            if [[ "$skill_name" != "_malicious" ]]; then
+                skill_tokens=$((skill_tokens + local_tokens))
+            fi
+
+            printf "  Skill: %-20s  %6d tokens" "$skill_name" "$local_tokens"
+            if [[ "$skill_name" == "_malicious" ]]; then
+                echo -e "  ${RED}(excluded — test only)${NC}"
+            else
+                echo ""
+            fi
+        fi
+    done
+fi
+
+# Governance overhead (always in context)
+governance_tokens=$((kernel_tokens + agents_tokens + lessons_tokens + todo_tokens))
+
+# What-If simulation
+if [[ $WHAT_IF -gt 0 ]]; then
+    avg_skill_tokens=0
+    if [[ $skill_count -gt 0 ]]; then
+        avg_skill_tokens=$((skill_tokens / skill_count))
+    else
+        avg_skill_tokens=500  # Default estimate
+    fi
+    skill_tokens=$((avg_skill_tokens * WHAT_IF))
+    echo ""
+    echo -e "${CYAN}What-If: Simulating $WHAT_IF skills loaded (avg ${avg_skill_tokens} tokens each)${NC}"
+fi
+
+# Total tokens
+total_tokens=$((governance_tokens + skill_tokens))
+
+# Useful tokens = skill tokens (actual task work)
+# Governance tokens = kernel + agents + lessons + todo (overhead)
+useful_tokens=$skill_tokens
+
+# CER calculation
+if [[ $total_tokens -gt 0 ]]; then
+    # Bash doesn't do floating point — use awk
+    cer=$(awk "BEGIN { printf \"%.3f\", $useful_tokens / $total_tokens }")
+else
+    cer="0.000"
+fi
+
+# Display
+echo ""
+echo -e "${BOLD}Token Breakdown${NC}"
+echo "────────────────────────────────────────"
+printf "  %-24s  %6d tokens\n" "CLAUDE.md (kernel)" "$kernel_tokens"
+printf "  %-24s  %6d tokens\n" "AGENTS.md (routing)" "$agents_tokens"
+printf "  %-24s  %6d tokens\n" "lessons.md (cache)" "$lessons_tokens"
+printf "  %-24s  %6d tokens\n" "todo.md (PCB)" "$todo_tokens"
+echo "  ────────────────────────────────────"
+printf "  %-24s  %6d tokens\n" "Governance overhead" "$governance_tokens"
+printf "  %-24s  %6d tokens\n" "Skill content (useful)" "$useful_tokens"
+printf "  ${BOLD}%-24s  %6d tokens${NC}\n" "TOTAL" "$total_tokens"
+echo ""
+
+# CER gauge
+echo -e "${BOLD}CER Gauge${NC}"
+echo "────────────────────────────────────────"
+
+# Visual gauge
+bar_width=40
+if [[ $total_tokens -gt 0 ]]; then
+    filled=$(awk "BEGIN { printf \"%d\", ($useful_tokens / $total_tokens) * $bar_width }")
+else
+    filled=0
+fi
+empty=$((bar_width - filled))
+
+# Color based on CER value
+cer_float=$(awk "BEGIN { print $useful_tokens / ($total_tokens > 0 ? $total_tokens : 1) }")
+if (( $(awk "BEGIN { print ($cer_float < 0.3) }") )); then
+    gauge_color="$RED"
+    status="CRITICAL"
+elif (( $(awk "BEGIN { print ($cer_float < 0.6) }") )); then
+    gauge_color="$YELLOW"
+    status="WARNING"
+else
+    gauge_color="$GREEN"
+    status="HEALTHY"
+fi
+
+printf "  ${gauge_color}["
+printf "%0.s█" $(seq 1 $filled 2>/dev/null || true)
+printf "%0.s░" $(seq 1 $empty 2>/dev/null || true)
+printf "]${NC}  ${BOLD}CER = $cer${NC}  "
+echo -e "${gauge_color}($status)${NC}"
+echo ""
+
+# Threshold check
+echo -e "${BOLD}Assessment${NC}"
+echo "────────────────────────────────────────"
+echo -e "  Target CER:  >= $THRESHOLD"
+echo -e "  Current CER: $cer"
+
+if (( $(awk "BEGIN { print ($cer_float >= $THRESHOLD) }") )); then
+    echo -e "  ${GREEN}✓ CER meets target threshold${NC}"
+    exit 0
+else
+    echo -e "  ${gauge_color}✗ CER below target threshold${NC}"
+    echo ""
+    echo "  Recommendations:"
+    echo "    - Unload idle skills (current: $skill_count loaded)"
+    echo "    - Prune expired lessons from lessons.md"
+    echo "    - Compress todo.md (remove completed tasks)"
+    if [[ $WHAT_IF -eq 0 ]]; then
+        echo ""
+        echo "  Try: ccos-cer --what-if 1   (simulate with only 1 skill)"
+    fi
+    exit 1
+fi

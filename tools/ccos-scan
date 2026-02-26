@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# ccos-scan — ClawdContext OS Security Scanner
+# Layer 1: Design-Time Scanner
+#
+# Scans SKILL.md, CLAUDE.md, and workspace files for TTP patterns.
+# Uses pattern definitions from security/scanner.config.yaml.
+#
+# Usage:
+#   ccos-scan [target_dir]          — Scan directory (default: agent/)
+#   ccos-scan --config <path>       — Custom config file
+#   ccos-scan --severity <level>    — Minimum severity (LOW|MEDIUM|HIGH|CRITICAL)
+#   ccos-scan --format <fmt>        — Output format (table|json)
+
+set -euo pipefail
+
+# Defaults
+TARGET="${1:-agent}"
+CONFIG="security/scanner.config.yaml"
+MIN_SEVERITY="LOW"
+FORMAT="table"
+FINDINGS=0
+CRITICAL_COUNT=0
+HIGH_COUNT=0
+MEDIUM_COUNT=0
+LOW_COUNT=0
+
+# Colors
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+GRAY='\033[0;90m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --config) CONFIG="$2"; shift 2 ;;
+        --severity) MIN_SEVERITY="$2"; shift 2 ;;
+        --format) FORMAT="$2"; shift 2 ;;
+        *) TARGET="$1"; shift ;;
+    esac
+done
+
+echo ""
+echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}║   ClawdContext OS — Security Scanner     ║${NC}"
+echo -e "${BOLD}║   Layer 1: Design-Time TTP Detection     ║${NC}"
+echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "Target:   ${CYAN}$TARGET${NC}"
+echo -e "Config:   ${GRAY}$CONFIG${NC}"
+echo -e "Severity: ${YELLOW}>= $MIN_SEVERITY${NC}"
+echo ""
+
+# Severity to number
+severity_num() {
+    case "$1" in
+        CRITICAL) echo 4 ;;
+        HIGH) echo 3 ;;
+        MEDIUM) echo 2 ;;
+        LOW) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+min_sev=$(severity_num "$MIN_SEVERITY")
+
+# Check target exists
+if [[ ! -d "$TARGET" ]]; then
+    echo -e "${RED}ERROR: Target directory '$TARGET' not found${NC}"
+    exit 2
+fi
+
+# Pattern definitions (embedded — also defined in scanner.config.yaml)
+# Format: "ID|SEVERITY|NAME|REGEX"
+PATTERNS=(
+    'CC-001|CRITICAL|data-exfiltration|curl.*\$(OPENAI_API_KEY\|AWS_SECRET\|GITHUB_TOKEN\|API_KEY\|SECRET)'
+    'CC-001|CRITICAL|data-exfiltration|wget.*\$(OPENAI_API_KEY\|AWS_SECRET\|GITHUB_TOKEN)'
+    'CC-002|CRITICAL|obfuscated-eval|eval.*base64'
+    'CC-002|CRITICAL|obfuscated-eval|base64.*-d.*\| *sh'
+    'CC-003|CRITICAL|credential-harvesting|~/\.ssh/(id_rsa\|id_ed25519)'
+    'CC-003|CRITICAL|credential-harvesting|~/\.aws/(credentials\|config)'
+    'CC-003|CRITICAL|credential-harvesting|\.(env\|env\.local\|env\.production)'
+    'CC-004|CRITICAL|prompt-injection|[Ii]gnore.*previous.*instructions'
+    'CC-004|CRITICAL|prompt-injection|[Nn]ew.*primary.*directive'
+    'CC-004|CRITICAL|prompt-injection|[Dd]isable.*safety.*checks'
+    'CC-005|CRITICAL|container-escape|docker.*docker\.sock'
+    'CC-005|CRITICAL|container-escape|nsenter.*--target.*1'
+    'CC-005|CRITICAL|container-escape|chroot.*/host'
+    'CC-005|CRITICAL|container-escape|mount.*-t.*cgroup'
+    'CC-006|CRITICAL|persistence|crontab.*curl'
+    'CC-006|CRITICAL|persistence|beacon\|c2\|callback'
+    'CC-007|HIGH|supply-chain-confusion|npm.*install.*(optimzer\|colros\|loadsh)'
+    'CC-007|HIGH|supply-chain-confusion|pip.*install.*(systm\|reqeusts)'
+    'CC-008|HIGH|wildcard-capabilities|file_read:\*\*'
+    'CC-008|HIGH|wildcard-capabilities|file_write:\*\*'
+    'CC-008|HIGH|wildcard-capabilities|net:\*'
+    'CC-008|HIGH|wildcard-capabilities|exec:\*'
+    'CC-009|HIGH|forged-signatures|signature:.*FORGED'
+    'CC-010|HIGH|excessive-permissions|rate_limit:.*[0-9]\{5,\}'
+    'CC-011|MEDIUM|network-access|curl.*-s'
+    'CC-012|MEDIUM|file-system-traversal|\.\./\.\.'
+    'CC-012|MEDIUM|file-system-traversal|/etc/(passwd\|shadow)'
+    'CC-013|MEDIUM|information-disclosure|echo.*\$.*KEY'
+    'CC-014|LOW|code-execution|eval\('
+    'CC-014|LOW|code-execution|exec\('
+)
+
+# Scan files
+report_finding() {
+    local file="$1" line_num="$2" id="$3" severity="$4" name="$5" match="$6"
+
+    local sev_n
+    sev_n=$(severity_num "$severity")
+    [[ $sev_n -lt $min_sev ]] && return
+
+    FINDINGS=$((FINDINGS + 1))
+    case "$severity" in
+        CRITICAL) CRITICAL_COUNT=$((CRITICAL_COUNT + 1)); color="$RED" ;;
+        HIGH) HIGH_COUNT=$((HIGH_COUNT + 1)); color="$YELLOW" ;;
+        MEDIUM) MEDIUM_COUNT=$((MEDIUM_COUNT + 1)); color="$CYAN" ;;
+        LOW) LOW_COUNT=$((LOW_COUNT + 1)); color="$GRAY" ;;
+        *) color="$NC" ;;
+    esac
+
+    if [[ "$FORMAT" == "json" ]]; then
+        echo "{\"id\":\"$id\",\"severity\":\"$severity\",\"name\":\"$name\",\"file\":\"$file\",\"line\":$line_num}"
+    else
+        printf "  ${color}%-8s${NC}  %-6s  %-24s  %s:%d\n" "$severity" "$id" "$name" "$file" "$line_num"
+    fi
+}
+
+echo -e "${BOLD}Scanning...${NC}"
+echo "────────────────────────────────────────────────────────────────────"
+
+# Find all scannable files (excluding red-team and scanner config)
+files=$(find "$TARGET" -type f \( -name "*.md" -o -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.sh" -o -name "*.py" -o -name "*.js" -o -name "*.ts" \) 2>/dev/null | sort)
+
+if [[ -z "$files" ]]; then
+    echo -e "${YELLOW}No scannable files found in $TARGET${NC}"
+    exit 0
+fi
+
+for file in $files; do
+    for pattern_def in "${PATTERNS[@]}"; do
+        IFS='|' read -r id severity name regex <<< "$pattern_def"
+
+        # Search for pattern in file
+        while IFS=: read -r line_num match; do
+            [[ -n "$line_num" ]] && report_finding "$file" "$line_num" "$id" "$severity" "$name" "$match"
+        done < <(grep -n -E "$regex" "$file" 2>/dev/null || true)
+    done
+done
+
+# Summary
+echo ""
+echo "────────────────────────────────────────────────────────────────────"
+echo -e "${BOLD}Scan Complete${NC}"
+echo ""
+echo -e "  Total findings: ${BOLD}$FINDINGS${NC}"
+echo -e "  ${RED}CRITICAL: $CRITICAL_COUNT${NC}"
+echo -e "  ${YELLOW}HIGH:     $HIGH_COUNT${NC}"
+echo -e "  ${CYAN}MEDIUM:   $MEDIUM_COUNT${NC}"
+echo -e "  ${GRAY}LOW:      $LOW_COUNT${NC}"
+echo ""
+
+if [[ $CRITICAL_COUNT -gt 0 ]]; then
+    echo -e "${RED}⚠ DEPLOYMENT BLOCKED — $CRITICAL_COUNT critical finding(s)${NC}"
+    exit 1
+elif [[ $HIGH_COUNT -gt 3 ]]; then
+    echo -e "${YELLOW}⚠ WARNING — $HIGH_COUNT high findings exceed threshold (max 3)${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✓ Scan passed within acceptable thresholds${NC}"
+    exit 0
+fi

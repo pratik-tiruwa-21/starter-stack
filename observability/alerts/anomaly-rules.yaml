@@ -1,0 +1,126 @@
+# ClawdContext OS — Anomaly Detection Alert Rules
+# Layer 5: FlightRecorder
+#
+# Detects behavioral deviations from baseline agent patterns.
+# These rules fire when agent behavior is unusual, not necessarily malicious.
+
+groups:
+  - name: ccos-anomaly-detection
+    interval: 30s
+    rules:
+
+      # === CER Anomalies ===
+
+      - alert: CER_Critical
+        expr: ccos_cer_ratio < 0.3
+        for: 2m
+        labels:
+          severity: critical
+          layer: "1"
+          eureka: "thermodynamics"
+        annotations:
+          summary: "CER critically low ({{ $value | humanizePercentage }})"
+          description: |
+            Context Efficiency Ratio has dropped below 0.3.
+            This is the thermodynamic heat death threshold — the agent's
+            context is overwhelmed with governance overhead.
+            Action: Force-unload all skills, prune lessons.md.
+          runbook: "https://github.com/openclawos/starter-stack#cer-recovery"
+
+      - alert: CER_Warning
+        expr: ccos_cer_ratio < 0.6
+        for: 5m
+        labels:
+          severity: warning
+          layer: "1"
+          eureka: "thermodynamics"
+        annotations:
+          summary: "CER below target ({{ $value | humanizePercentage }})"
+          description: |
+            CER is below the 0.6 target threshold.
+            Agent performance will degrade as more tokens are spent on
+            governance vs. useful work. Consider unloading idle skills.
+
+      - alert: CER_Rapid_Drop
+        expr: delta(ccos_cer_ratio[5m]) < -0.2
+        for: 1m
+        labels:
+          severity: warning
+          layer: "1"
+        annotations:
+          summary: "CER dropped {{ $value | humanizePercentage }} in 5 minutes"
+          description: "Rapid CER decline suggests a large skill was loaded or context pollution occurred."
+
+      # === Skill Anomalies ===
+
+      - alert: Excessive_Skills_Loaded
+        expr: ccos_skills_loaded > 4
+        for: 5m
+        labels:
+          severity: warning
+          layer: "1"
+          eureka: "kessler"
+        annotations:
+          summary: "{{ $value }} skills loaded simultaneously"
+          description: |
+            Kessler Syndrome risk: too many skills loaded creates instruction
+            debris cascade. Each additional skill reduces CER by ~13%.
+            Target: ≤ 3 skills loaded at any time.
+
+      - alert: Unsigned_Skill_Loaded
+        expr: ccos_skills_unsigned > 0
+        for: 0m
+        labels:
+          severity: high
+          layer: "2"
+        annotations:
+          summary: "{{ $value }} unsigned skill(s) detected"
+          description: "Unsigned skills bypass supply chain verification. Run `make sign` to sign all skills."
+
+      # === Token Anomalies ===
+
+      - alert: Token_Budget_Exceeded
+        expr: ccos_tokens_consumed_total > ccos_token_budget * 0.9
+        for: 1m
+        labels:
+          severity: warning
+          layer: "4"
+        annotations:
+          summary: "Token budget 90% consumed for skill {{ $labels.skill }}"
+          description: "Approaching token budget limit. Skill will be rate-limited at 100%."
+
+      - alert: Token_Spike
+        expr: rate(ccos_tokens_consumed_total[1m]) > rate(ccos_tokens_consumed_total[1h]) * 3
+        for: 2m
+        labels:
+          severity: warning
+          layer: "4"
+        annotations:
+          summary: "Abnormal token consumption spike (3x baseline)"
+          description: "Token consumption rate is 3x the hourly average. Possible prompt injection or infinite loop."
+
+      # === Lesson Cache Anomalies ===
+
+      - alert: Lessons_Kessler_Risk
+        expr: ccos_lessons_count > 18
+        for: 5m
+        labels:
+          severity: warning
+          layer: "1"
+          eureka: "kessler"
+        annotations:
+          summary: "lessons.md at {{ $value }}/20 capacity"
+          description: "Approaching Kessler threshold. Evict deprecated and expired lessons."
+
+      - alert: Lessons_PID_Windup
+        expr: ccos_lessons_contradictions > 0
+        for: 0m
+        labels:
+          severity: high
+          layer: "1"
+          eureka: "pid-windup"
+        annotations:
+          summary: "{{ $value }} contradicting lessons detected"
+          description: |
+            PID Windup: accumulated corrections in lessons.md are contradicting
+            each other, causing oscillating behavior. Review and deduplicate.
