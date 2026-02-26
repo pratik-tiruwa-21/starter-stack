@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Discussions"
+    url: https://github.com/ClawdContextOS/starter-stack/discussions
+    about: "Ask questions, share ideas, and discuss the project"
+  - name: "ClawdContext Website"
+    url: https://clawdcontext.com
+    about: "Learn more about the ClawdContext platform"
+  - name: "VS Code Extension"
+    url: https://marketplace.visualstudio.com/items?itemName=clawdcontext.clawdcontext
+    about: "Install the ClawdContext Scanner (Layer 1)"

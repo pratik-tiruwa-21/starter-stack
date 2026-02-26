@@ -1,0 +1,52 @@
+{
+  "name": "ClawdContext OS",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": true,
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "clawdcontext.clawdcontext",
+        "redhat.vscode-yaml",
+        "ms-azuretools.vscode-docker",
+        "tsandall.opa"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "workbench.colorTheme": "Default Dark Modern",
+        "editor.fontFamily": "'JetBrains Mono', 'Fira Code', monospace",
+        "editor.fontSize": 14,
+        "editor.rulers": [100],
+        "terminal.integrated.fontSize": 13
+      }
+    }
+  },
+
+  "postCreateCommand": "make setup && echo '✅ ClawdContext OS ready — run: make scan'",
+
+  "postStartCommand": "echo '╔══════════════════════════════════════╗' && echo '║   ClawdContext OS — Ready            ║' && echo '║                                      ║' && echo '║   make scan      → Security scan     ║' && echo '║   make cer       → CER analysis      ║' && echo '║   make red-team  → Attack sims       ║' && echo '║   make up        → Start stack       ║' && echo '║   make help      → All commands      ║' && echo '╚══════════════════════════════════════╝'",
+
+  "forwardPorts": [3000, 9090, 3100],
+  "portsAttributes": {
+    "3000": { "label": "Grafana", "onAutoForward": "notify" },
+    "9090": { "label": "Prometheus", "onAutoForward": "silent" },
+    "3100": { "label": "Loki", "onAutoForward": "silent" }
+  },
+
+  "remoteUser": "vscode",
+
+  "containerEnv": {
+    "CCOS_ROOT": "/workspaces/starter-stack",
+    "TERM": "xterm-256color"
+  }
+}

@@ -1,0 +1,133 @@
+name: CI — Security & Governance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    name: "scan"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Layer 1 — Security Scan"
+        run: |
+          chmod +x tools/ccos-scan
+          bash tools/ccos-scan agent
+        
+      - name: "Scan Full Workspace"
+        run: bash tools/ccos-scan .
+
+  cer:
+    name: "cer"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "CER — Context Efficiency Ratio"
+        run: |
+          chmod +x tools/ccos-cer
+          bash tools/ccos-cer agent
+
+  signatures:
+    name: "signatures"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Layer 2 — Verify Skill Signatures"
+        run: |
+          chmod +x tools/ccos-sign security/signing/*.sh
+          # In CI, we check that safe skills have valid frontmatter structure
+          # Full Ed25519 verification requires keys (done in signing workflow)
+          echo "Checking skill frontmatter integrity..."
+          for skill in agent/skills/*/SKILL.md; do
+            name=$(basename "$(dirname "$skill")")
+            if [[ "$name" == "_malicious" ]]; then
+              echo "⚠ SKIP: $name (intentionally poisoned)"
+              continue
+            fi
+            if head -1 "$skill" | grep -q "^---"; then
+              echo "✓ $name — has YAML frontmatter"
+            else
+              echo "✗ $name — missing YAML frontmatter"
+              exit 1
+            fi
+          done
+          echo "All safe skills have valid frontmatter."
+
+  red-team:
+    name: "red-team"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Red Team — Attack Simulations"
+        run: |
+          chmod +x tools/ccos-scan red-team/*.sh
+          echo "=== Prompt Injection Tests ==="
+          bash red-team/test-injection.sh || true
+          echo ""
+          echo "=== Data Exfiltration Tests ==="
+          bash red-team/test-exfil.sh || true
+          echo ""
+          echo "=== Privilege Escalation Tests ==="
+          bash red-team/test-escalation.sh || true
+
+  policy-lint:
+    name: "policy-lint"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Layer 4 — Validate OPA Policies"
+        run: |
+          # Install OPA
+          curl -fsSL -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static
+          chmod +x /usr/local/bin/opa
+          
+          echo "Checking Rego syntax..."
+          for policy in security/policies/*.rego; do
+            echo -n "  $(basename "$policy"): "
+            if opa check "$policy" 2>&1; then
+              echo "✓"
+            else
+              echo "✗"
+              exit 1
+            fi
+          done
+          echo "All policies valid."
+
+  summary:
+    name: "summary"
+    runs-on: ubuntu-latest
+    needs: [scan, cer, signatures, red-team, policy-lint]
+    if: always()
+    steps:
+      - name: "Pipeline Summary"
+        run: |
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║   ClawdContext OS — CI Pipeline Results      ║"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  Layer 1  Scanner:      ${{ needs.scan.result }}  ║"
+          echo "║  CER:                   ${{ needs.cer.result }}  ║"
+          echo "║  Layer 2  Signatures:   ${{ needs.signatures.result }}  ║"
+          echo "║  Red Team:              ${{ needs.red-team.result }}  ║"
+          echo "║  Layer 4  Policies:     ${{ needs.policy-lint.result }}  ║"
+          echo "╚══════════════════════════════════════════════╝"
+          
+          if [[ "${{ needs.scan.result }}" == "failure" ]] || \
+             [[ "${{ needs.cer.result }}" == "failure" ]] || \
+             [[ "${{ needs.signatures.result }}" == "failure" ]]; then
+            echo "❌ Pipeline FAILED — security gates not met"
+            exit 1
+          fi
+          
+          echo "✅ All security gates passed"

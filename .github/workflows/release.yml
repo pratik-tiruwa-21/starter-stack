@@ -1,0 +1,55 @@
+name: "Release — Tag & Changelog"
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: "Create Release"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Generate Changelog"
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [[ -z "$PREV_TAG" ]]; then
+            CHANGES=$(git log --oneline --pretty=format:"- %s" HEAD)
+          else
+            CHANGES=$(git log --oneline --pretty=format:"- %s" "${PREV_TAG}..HEAD")
+          fi
+          
+          {
+            echo "changelog<<EOF"
+            echo "## What's Changed"
+            echo ""
+            echo "$CHANGES"
+            echo ""
+            echo "## Security Layers Status"
+            echo ""
+            echo "| Layer | Component | Status |"
+            echo "|-------|-----------|--------|"
+            echo "| 1 | Design Time Scanner | ✅ BUILT |"
+            echo "| 2 | ClawdSign (Ed25519) | ✅ BUILT |"
+            echo "| 3 | Docker Sandbox | ✅ BUILT |"
+            echo "| 4 | AgentProxy | 🚧 IN PROGRESS |"
+            echo "| 5 | FlightRecorder | 📋 PLANNED |"
+            echo "| 6 | SnapshotEngine | 📋 PLANNED |"
+            echo ""
+            echo "**Full Changelog**: https://github.com/ClawdContextOS/starter-stack/compare/${PREV_TAG:-initial}...${GITHUB_REF_NAME}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Create GitHub Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.changelog.outputs.changelog }}
+          generate_release_notes: true
