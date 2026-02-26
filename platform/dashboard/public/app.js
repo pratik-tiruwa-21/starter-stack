@@ -13,6 +13,12 @@ const API = {
 let ws = null;
 let eventCount = 0;
 let bootComplete = false;
+let bootStarted = false;
+let dashboardInitialized = false;
+let dashboardIntervalsStarted = false;
+let statusRefreshInterval = null;
+let serviceCheckInterval = null;
+let footerClockInterval = null;
 
 // ─── Boot Sequence ───────────────────────────────────────────────
 
@@ -35,6 +41,8 @@ const BOOT_STEPS = [
 ];
 
 async function runBoot() {
+  if (bootStarted) return;
+  bootStarted = true;
   const log = document.getElementById('boot-log');
   const bar = document.getElementById('boot-bar');
 
@@ -73,6 +81,9 @@ async function runBoot() {
 // ─── Dashboard Init ──────────────────────────────────────────────
 
 async function initDashboard() {
+  if (dashboardInitialized) return;
+  dashboardInitialized = true;
+
   checkServices();
   loadStatus();
   loadPatterns();
@@ -81,10 +92,13 @@ async function initDashboard() {
   connectWebSocket();
   initChat();
 
-  // Periodic refresh
-  setInterval(loadStatus, 5000);
-  setInterval(checkServices, 10000);
-  setInterval(updateFooterTime, 1000);
+  // Periodic refresh (guarded to avoid duplicate timers on re-init)
+  if (!dashboardIntervalsStarted) {
+    statusRefreshInterval = setInterval(loadStatus, 5000);
+    serviceCheckInterval = setInterval(checkServices, 10000);
+    footerClockInterval = setInterval(updateFooterTime, 1000);
+    dashboardIntervalsStarted = true;
+  }
   updateFooterTime();
 }
 
@@ -187,6 +201,10 @@ function updateLayers(layers) {
 // ─── WebSocket Events ────────────────────────────────────────────
 
 function connectWebSocket() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${location.host}/ws/proxy/events`;
 
@@ -582,8 +600,10 @@ async function sendChatMessage(e) {
       }
     }
 
-    // Render response
-    appendChatMsg('assistant', 'OpenClaw', escapeHtml(data.response));
+    // Render response (use marked.js for markdown if available)
+    const replyText = data.message || data.response || '';
+    const replyHtml = (typeof marked !== 'undefined') ? marked.parse(replyText) : escapeHtml(replyText);
+    appendChatMsg('assistant', 'OpenClaw', replyHtml);
 
     // Refresh sidebar stats
     loadOpenClawStats();
@@ -1039,4 +1059,4 @@ function updateFooterTime() {
 
 // ─── Start ───────────────────────────────────────────────────────
 
-window.addEventListener('DOMContentLoaded', runBoot);
+window.addEventListener('DOMContentLoaded', runBoot, { once: true });

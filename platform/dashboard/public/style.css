@@ -511,6 +511,22 @@ select.input { cursor: pointer; }
 .chat-msg.user .chat-role { color: var(--cyan); }
 .chat-msg.assistant .chat-role { color: var(--green); }
 
+/* Markdown content rendered by marked.js inside chat messages */
+.chat-content p { margin-bottom: 6px; }
+.chat-content p:last-child { margin-bottom: 0; }
+.chat-content strong { color: var(--text-bright); }
+.chat-content em { color: var(--text-dim); font-style: italic; }
+.chat-content ul, .chat-content ol { margin: 4px 0 4px 18px; }
+.chat-content li { margin-bottom: 2px; }
+.chat-content h1, .chat-content h2, .chat-content h3, .chat-content h4 {
+  color: var(--cyan); font-size: 12px; font-weight: 700; margin: 8px 0 4px;
+}
+.chat-content a { color: var(--cyan); text-decoration: underline; }
+.chat-content blockquote {
+  border-left: 2px solid var(--cyan-dim); padding-left: 10px; margin: 6px 0;
+  color: var(--text-dim);
+}
+
 .chat-input-area {
   display: flex;
   gap: 8px;

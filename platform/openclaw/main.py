@@ -1035,8 +1035,8 @@ async def websocket_terminal(websocket: WebSocket):
                     async for token in llm.generate_stream(
                         terminal_sessions[session_id], system_prompt, kernel_state
                     ):
-                        # Convert markdown bold to ANSI bold
-                        display_token = token.replace("**", "\x1b[1m")
+                        # Convert newlines for xterm.js (\n → \r\n) and markdown bold to ANSI bold
+                        display_token = token.replace("\n", "\r\n").replace("**", "\x1b[1m")
                         await websocket.send_json({
                             "type": "output",
                             "data": display_token,
