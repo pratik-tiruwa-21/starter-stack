@@ -366,18 +366,18 @@ class MarkdownKernel:
 
         if kernel.claude_md:
             parts.append("=== BOOT CONFIG (CLAUDE.md) ===")
-            # Truncate to avoid context bloat (Eureka #3)
-            parts.append(kernel.claude_md[:4000])
+            # Truncate aggressively to save tokens for code generation (Eureka #3)
+            parts.append(kernel.claude_md[:2000])
             parts.append("")
 
         if kernel.todo_md:
             parts.append("=== PROCESS CONTROL BLOCK (todo.md) ===")
-            parts.append(kernel.todo_md[:2000])
+            parts.append(kernel.todo_md[:1000])
             parts.append("")
 
         if kernel.lessons_md:
             parts.append("=== ADAPTIVE CACHE (lessons.md) ===")
-            parts.append(kernel.lessons_md[:2000])
+            parts.append(kernel.lessons_md[:1000])
             parts.append("")
 
         if kernel.skills:
@@ -441,6 +441,7 @@ class ToolExecutor:
             )
             data = resp.json()
             latency = (time.monotonic() - start) * 1000
+            print(f"[ToolExec] AgentProxy decision={data.get('decision')}, latency={latency:.0f}ms")
 
             decision = data.get("decision", "DENY")
             result = ToolResult(
@@ -503,17 +504,20 @@ class ToolExecutor:
         tool = tool_call.tool
         args = tool_call.arguments
         preview_url = None
+        # Execute sandboxed tool
 
         # ── Code Execution (via code-runner sandbox) ──
         if tool == "execute_code":
             language = args.get("language", "python")
             code = args.get("code", "")
             filename = args.get("filename", "")
+            print(f"[ToolExec] execute_code: lang={language}, code_len={len(code)}, filename={filename!r}")
 
             result = await self.code_runner.execute(
                 language=language, code=code,
                 session_id=session_id, filename=filename,
             )
+            print(f"[ToolExec] code-runner result: exit_code={result.get('exit_code')}, files={result.get('files_created')}")
 
             # code-runner returns: {stdout, stderr, exit_code, files_created, error, ...}
             # Error path (connection failure) returns: {success: False, error: ...}
@@ -811,8 +815,60 @@ class DeepSeekLLM:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        self.client = httpx.AsyncClient(timeout=60.0)
+        self.client = httpx.AsyncClient(timeout=180.0)
         self.model = MODEL_NAME
+
+    @staticmethod
+    def _repair_truncated_json(raw: str) -> dict:
+        """Attempt to parse truncated JSON from a cut-off function call.
+        DeepSeek may hit max_tokens mid-argument, leaving broken JSON."""
+        # Try as-is first
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        # Strategy 1: close open strings and braces
+        repaired = raw.rstrip()
+        # Count unclosed quotes
+        in_string = False
+        escaped = False
+        for ch in repaired:
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+        if in_string:
+            repaired += '"'
+        # Close any unclosed braces/brackets
+        open_braces = repaired.count('{') - repaired.count('}')
+        open_brackets = repaired.count('[') - repaired.count(']')
+        repaired += ']' * max(open_brackets, 0)
+        repaired += '}' * max(open_braces, 0)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+        # Strategy 2: extract code field with regex
+        import re
+        m = re.search(r'"code"\s*:\s*"(.*)', raw, re.DOTALL)
+        if m:
+            code_val = m.group(1)
+            # Remove trailing incomplete escapes
+            if code_val.endswith('\\'):
+                code_val = code_val[:-1]
+            # Unescape basic JSON escapes
+            code_val = code_val.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+            # Try to get language too
+            lang_m = re.search(r'"language"\s*:\s*"(\w+)"', raw)
+            lang = lang_m.group(1) if lang_m else 'html'
+            fn_m = re.search(r'"filename"\s*:\s*"([^"]+)"', raw)
+            fn = fn_m.group(1) if fn_m else ''
+            return {"language": lang, "code": code_val, "filename": fn}
+        return {}
 
     async def generate(self, messages: list[ChatMessage], system_prompt: str,
                        kernel: KernelState) -> tuple[str, list[ToolCall]]:
@@ -822,6 +878,8 @@ class DeepSeekLLM:
             for msg in messages[-20:]:
                 api_messages.append({"role": msg.role, "content": msg.content})
 
+            import time as _t
+            t0 = _t.monotonic()
             resp = await self.client.post(
                 self.api_url,
                 json={
@@ -830,11 +888,13 @@ class DeepSeekLLM:
                     "tools": TOOL_SCHEMAS,
                     "tool_choice": "auto",
                     "temperature": 0.7,
-                    "max_tokens": 4000,
+                    "max_tokens": 8192,
                     "stream": False,
                 },
                 headers=self.headers,
             )
+            elapsed = _t.monotonic() - t0
+            print(f"[DeepSeek] API responded in {elapsed:.1f}s, status={resp.status_code}")
 
             if resp.status_code != 200:
                 error_text = resp.text[:200]
@@ -844,6 +904,9 @@ class DeepSeekLLM:
             data = resp.json()
             choice = data["choices"][0]
             message = choice["message"]
+            finish_reason = choice.get("finish_reason", "")
+            usage = data.get("usage", {})
+            print(f"[DeepSeek] finish_reason={finish_reason}, tokens={usage.get('total_tokens', '?')}")
 
             # Check for tool calls in the response
             tool_calls_data = message.get("tool_calls", [])
@@ -851,10 +914,10 @@ class DeepSeekLLM:
                 tool_calls = []
                 for tc in tool_calls_data:
                     fn = tc["function"]
-                    try:
-                        arguments = json.loads(fn.get("arguments", "{}"))
-                    except json.JSONDecodeError:
-                        arguments = {}
+                    raw_args = fn.get("arguments", "{}")
+                    arguments = self._repair_truncated_json(raw_args)
+                    if not arguments and finish_reason == "length":
+                        print(f"[DeepSeek] WARNING: truncated tool call for {fn['name']}, could not repair")
                     tool_calls.append(ToolCall(
                         tool=fn["name"],
                         arguments=arguments,
@@ -869,7 +932,9 @@ class DeepSeekLLM:
             return content, []
 
         except Exception as e:
-            print(f"[DeepSeek] Exception: {e}")
+            import traceback
+            print(f"[DeepSeek] Exception ({type(e).__name__}): {e}")
+            traceback.print_exc()
             return await self.mock.generate(messages, system_prompt, kernel)
 
     async def synthesize_after_tools(self, messages: list[ChatMessage],
@@ -886,6 +951,8 @@ class DeepSeekLLM:
                 "content": f"Here are the results of the tool executions:\n\n{tool_results_text}\n\nPlease provide a helpful response summarizing the results and any next steps.",
             })
 
+            print(f"[DeepSeek] Synthesis call: {len(api_messages)} messages, tool_results={len(tool_results_text)} chars")
+            t0 = time.monotonic()
             resp = await self.client.post(
                 self.api_url,
                 json={
@@ -897,11 +964,18 @@ class DeepSeekLLM:
                 },
                 headers=self.headers,
             )
+            elapsed = time.monotonic() - t0
+            print(f"[DeepSeek] Synthesis responded in {elapsed:.1f}s, status={resp.status_code}")
             if resp.status_code == 200:
                 data = resp.json()
-                return data["choices"][0]["message"].get("content", "")
+                content = data["choices"][0]["message"].get("content", "")
+                print(f"[DeepSeek] Synthesis content: {len(content)} chars")
+                return content
+            else:
+                print(f"[DeepSeek] Synthesis error response: {resp.text[:500]}")
         except Exception as e:
-            print(f"[DeepSeek] Synthesis error: {e}")
+            print(f"[DeepSeek] Synthesis error: {type(e).__name__}: {e}")
+            import traceback; traceback.print_exc()
         return ""  # Empty means use the raw tool output
 
     async def generate_stream(self, messages: list[ChatMessage], system_prompt: str,
@@ -921,7 +995,7 @@ class DeepSeekLLM:
                     "tools": TOOL_SCHEMAS,
                     "tool_choice": "auto",
                     "temperature": 0.7,
-                    "max_tokens": 4000,
+                    "max_tokens": 8192,
                     "stream": True,
                 },
                 headers=self.headers,
@@ -1190,10 +1264,12 @@ async def chat(req: ChatRequest):
     """Main chat endpoint — process user message, execute tool calls via AgentProxy."""
     start = time.monotonic()
     stats["total_chats"] += 1
+    print(f"[Chat] START session={req.session_id} msg={req.message[:80]!r}")
 
     # Load kernel state
     kernel_state = kernel.load_kernel()
     system_prompt = kernel.get_system_prompt(kernel_state)
+    # Kernel loaded
 
     # Get/create session history
     if req.session_id not in sessions:
@@ -1214,6 +1290,7 @@ async def chat(req: ChatRequest):
             memory_context = "\n".join(memory_parts)
     except Exception:
         pass  # Don't block chat on memory failures
+    # Memory recall done
 
     # Generate response + tool calls
     all_messages = req.history if req.history else history
@@ -1224,6 +1301,7 @@ async def chat(req: ChatRequest):
         augmented_prompt = system_prompt + "\n\n" + memory_context
 
     response_text, tool_calls = await llm.generate(all_messages, augmented_prompt, kernel_state)
+    print(f"[Chat] LLM returned: {len(response_text)} chars, {len(tool_calls)} tool_calls")
 
     # Execute tool calls through AgentProxy
     tool_results: list[ToolResult] = []
@@ -1281,17 +1359,27 @@ async def chat(req: ChatRequest):
         response_text = "\n".join(parts)
 
         # Multi-turn synthesis: send tool results back to LLM for a polished response
+        # Use a 45s timeout — if synthesis takes longer, use the raw tool output
         if isinstance(llm, DeepSeekLLM) and tool_summary_parts:
             try:
-                synthesis = await llm.synthesize_after_tools(
-                    all_messages, augmented_prompt,
-                    "\n\n".join(tool_summary_parts),
+                print(f"[Chat] Starting synthesis with {len(tool_summary_parts)} tool summaries...")
+                synthesis = await asyncio.wait_for(
+                    llm.synthesize_after_tools(
+                        all_messages, augmented_prompt,
+                        "\n\n".join(tool_summary_parts),
+                    ),
+                    timeout=45.0,
                 )
                 if synthesis:
                     response_text = synthesis
                     # Append preview link if available
                     if last_preview_url:
                         response_text += f"\n\n**Preview:** [Open Preview]({last_preview_url})"
+            except asyncio.TimeoutError:
+                print(f"[Chat] Synthesis timed out after 45s, using raw tool output")
+                # Append preview link to raw output
+                if last_preview_url:
+                    response_text += f"\n\n**Preview:** [Open Preview]({last_preview_url})"
             except Exception as e:
                 print(f"[OpenClaw] Synthesis error: {e}")
 
