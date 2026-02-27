@@ -839,9 +839,11 @@ async function sendChatMessage(e) {
     // Render tool calls
     if (data.tool_calls && data.tool_calls.length > 0) {
       for (const tc of data.tool_calls) {
-        const statusCls = tc.proxy_decision === 'ALLOW' ? 'allowed' : tc.proxy_decision === 'DENY' ? 'denied' : 'gated';
-        const resultPreview = tc.result ? (typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result)).slice(0, 500) : '';
-        appendChatToolResult(tc.tool, tc.proxy_decision, statusCls, resultPreview);
+        const decision = tc.proxy_decision || tc.decision || 'UNKNOWN';
+        const statusCls = decision === 'ALLOW' ? 'allowed' : decision === 'DENY' ? 'denied' : 'gated';
+        const output = tc.result || tc.output || tc.error || '';
+        const resultPreview = (typeof output === 'string' ? output : JSON.stringify(output)).slice(0, 2000);
+        appendChatToolResult(tc.tool, decision, statusCls, resultPreview);
       }
     }
 

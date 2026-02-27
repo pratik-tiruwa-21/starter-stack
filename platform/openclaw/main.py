@@ -136,7 +136,7 @@ class MarkdownKernel:
         skills_dir = self.agent_dir / "skills"
         if skills_dir.exists():
             for skill_path in skills_dir.iterdir():
-                if skill_path.is_dir() and not skill_path.name.startswith("."):
+                if skill_path.is_dir() and not skill_path.name.startswith(".") and not skill_path.name.startswith("_"):
                     skills.append(skill_path.name)
 
         # Calculate CER (Eureka #3) — useful tokens / total tokens
