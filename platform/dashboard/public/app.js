@@ -242,7 +242,7 @@ function addEvent(data) {
   el.innerHTML = `
     <span class="event-time">${time}</span>
     <span class="event-badge ${badgeClass}">${data.decision}</span>
-    <span class="event-detail"><strong>${data.skill}</strong> → ${data.tool} (${data.latency_ms.toFixed(1)}ms)</span>
+    <span class="event-detail"><strong>${data.skill}</strong> → ${data.tool} (${data.latency_us ? data.latency_us + 'µs' : (data.latency_ms || 0).toFixed(1) + 'ms'})</span>
   `;
 
   stream.insertBefore(el, stream.firstChild);
@@ -761,15 +761,18 @@ async function runDemoAttack() {
         body: JSON.stringify(attack),
       });
       const data = await resp.json();
-      addEvent({
+      const evt = {
         timestamp: new Date().toISOString(),
         skill: attack.skill,
         tool: attack.tool,
         decision: data.decision,
-        latency_ms: data.latency_ms,
-      });
+        latency_us: data.latency_us || 0,
+        latency_ms: (data.latency_us || 0) / 1000,
+      };
+      addEvent(evt);
+      addProxyEvent(evt);
       await sleep(400);
-    } catch {}
+    } catch (err) { console.warn('Simulation step failed:', err); }
   }
 
   loadStatus();
