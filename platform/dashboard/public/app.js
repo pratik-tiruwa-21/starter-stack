@@ -8,6 +8,7 @@ const API = {
   scanner: '/api/scanner',
   recorder: '/api/recorder',
   openclaw: '/api/openclaw',
+  replay: '/api/replay',
 };
 
 let ws = null;
@@ -31,6 +32,7 @@ const BOOT_STEPS = [
   { msg: 'Layer 3: Docker Sandbox .................', cls: '', delay: 80, check: null },
   { msg: 'Layer 4: AgentProxy (Reference Monitor) .', cls: '', delay: 100, check: 'proxy' },
   { msg: 'Layer 5: FlightRecorder .................', cls: '', delay: 100, check: 'recorder' },
+  { msg: 'Layer 5→6: ReplayEngine .................', cls: '', delay: 100, check: 'replay' },
   { msg: 'Layer 6: SnapshotEngine .................', cls: '', delay: 80, check: null },
   { msg: 'Loading TTP pattern database (14 categories)...', cls: '', delay: 120 },
   { msg: 'Initializing hash-chained audit log...', cls: '', delay: 100 },
@@ -89,7 +91,9 @@ async function initDashboard() {
   loadPatterns();
   loadSkills();
   loadAudit();
+  loadTimelines();
   connectWebSocket();
+  connectReplayWs();
   initChat();
 
   // Periodic refresh (guarded to avoid duplicate timers on re-init)
@@ -110,6 +114,7 @@ async function checkServices() {
     { id: 'light-proxy', url: `${API.proxy}/healthz` },
     { id: 'light-scanner', url: `${API.scanner}/healthz` },
     { id: 'light-recorder', url: `${API.recorder}/healthz` },
+    { id: 'light-replay', url: `${API.replay}/healthz` },
   ];
 
   for (const svc of services) {
@@ -1047,6 +1052,473 @@ function copyPreviewContent() {
       setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 1500);
     }).catch(() => {});
   }
+}
+
+// ─── Replay Engine ───────────────────────────────────────────────
+
+let replayTimelines = [];
+let replaySteps = [];
+let replayCurrentStep = -1;
+let replayPlaying = false;
+let replayTimer = null;
+let replaySpeed = 1000;
+let replaySelectedTimeline = null;
+let replayWs = null;
+
+async function loadTimelines() {
+  try {
+    // Load stats
+    const statsResp = await fetch(`${API.replay}/api/v1/stats`);
+    const stats = await statsResp.json();
+    const statsEl = document.getElementById('replay-stats');
+    statsEl.innerHTML = `
+      <div class="replay-stat-row">
+        <span class="replay-stat"><span class="stat-value">${stats.total_timelines || 0}</span> timelines</span>
+        <span class="replay-stat"><span class="stat-value">${stats.total_nodes || 0}</span> nodes</span>
+        <span class="replay-stat"><span class="stat-value">${stats.total_branches || 0}</span> branches</span>
+        <span class="replay-stat"><span class="stat-value">${stats.total_snapshots || 0}</span> snapshots</span>
+      </div>
+    `;
+
+    // Load timelines
+    const resp = await fetch(`${API.replay}/api/v1/timelines?limit=50`);
+    const data = await resp.json();
+    replayTimelines = data.timelines || [];
+
+    const listEl = document.getElementById('timeline-list');
+    if (replayTimelines.length === 0) {
+      listEl.innerHTML = '<div class="result-placeholder">No timelines yet. Chat or use the terminal to create agent activity.</div>';
+      return;
+    }
+
+    listEl.innerHTML = replayTimelines.map(tl => `
+      <div class="timeline-item ${replaySelectedTimeline === tl.id ? 'selected' : ''}"
+           onclick="selectTimeline('${tl.id}')">
+        <div class="timeline-item-header">
+          <span class="timeline-name">${escapeHtml(tl.name || tl.session_id)}</span>
+          <span class="timeline-badge">${tl.node_count} nodes</span>
+          ${tl.branch_count > 0 ? `<span class="timeline-badge branch">⑂ ${tl.branch_count}</span>` : ''}
+          ${tl.parent_timeline ? '<span class="timeline-badge fork">FORK</span>' : ''}
+        </div>
+        <div class="timeline-item-meta">
+          <span>${tl.status === 'active' ? '●' : '○'} ${tl.status}</span>
+          <span>${formatTimeAgo(tl.updated_at)}</span>
+          <span class="timeline-id">${tl.id}</span>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    document.getElementById('timeline-list').innerHTML =
+      `<div class="result-placeholder err">ReplayEngine unavailable: ${err.message}</div>`;
+  }
+}
+
+async function selectTimeline(tlId) {
+  replaySelectedTimeline = tlId;
+  replayCurrentStep = -1;
+  replayPlaying = false;
+  clearInterval(replayTimer);
+
+  // Highlight selection
+  document.querySelectorAll('.timeline-item').forEach(el => el.classList.remove('selected'));
+  event.currentTarget?.classList.add('selected');
+
+  // Load replay steps
+  try {
+    const resp = await fetch(`${API.replay}/api/v1/replay/${tlId}`);
+    const data = await resp.json();
+    replaySteps = data.steps || [];
+
+    // Enable controls
+    setReplayControlsEnabled(replaySteps.length > 0);
+    document.getElementById('replay-step-total').textContent = replaySteps.length;
+    document.getElementById('replay-step-num').textContent = '—';
+    document.getElementById('btn-branch').disabled = false;
+    document.getElementById('btn-diff').disabled = replayTimelines.length < 2;
+
+    // Render timeline visualization
+    renderTimelineVis(replaySteps);
+
+    // Render CER trend
+    renderCerTrend(replaySteps);
+
+    // Show first step detail
+    if (replaySteps.length > 0) {
+      replayJump(0);
+    }
+  } catch (err) {
+    document.getElementById('replay-step-detail').innerHTML =
+      `<div class="result-placeholder err">Failed to load timeline: ${err.message}</div>`;
+  }
+}
+
+function setReplayControlsEnabled(enabled) {
+  ['btn-replay-start', 'btn-replay-back', 'btn-replay-play', 'btn-replay-fwd', 'btn-replay-end']
+    .forEach(id => document.getElementById(id).disabled = !enabled);
+}
+
+function replayToggle() {
+  if (replayPlaying) {
+    // Pause
+    replayPlaying = false;
+    clearInterval(replayTimer);
+    document.getElementById('btn-replay-play').textContent = '▶';
+  } else {
+    // Play
+    replayPlaying = true;
+    document.getElementById('btn-replay-play').textContent = '⏸';
+    if (replayCurrentStep >= replaySteps.length - 1) replayCurrentStep = -1;
+    replayTimer = setInterval(() => {
+      if (replayCurrentStep < replaySteps.length - 1) {
+        replayStep(1);
+      } else {
+        replayPlaying = false;
+        clearInterval(replayTimer);
+        document.getElementById('btn-replay-play').textContent = '▶';
+      }
+    }, replaySpeed);
+  }
+}
+
+function replayStep(delta) {
+  const next = replayCurrentStep + delta;
+  if (next < 0 || next >= replaySteps.length) return;
+  replayJump(next);
+}
+
+function replayJump(stepNum) {
+  if (stepNum === -1) stepNum = replaySteps.length - 1;
+  if (stepNum < 0 || stepNum >= replaySteps.length) return;
+  replayCurrentStep = stepNum;
+
+  const step = replaySteps[stepNum];
+  document.getElementById('replay-step-num').textContent = stepNum + 1;
+
+  // Highlight current in timeline vis
+  document.querySelectorAll('.tl-node').forEach((el, i) => {
+    el.classList.toggle('current', i === stepNum);
+  });
+
+  // Render step detail
+  const node = step.node;
+  const snap = step.snapshot;
+  const detailEl = document.getElementById('replay-step-detail');
+
+  let decisionBadge = '';
+  if (node.proxy_decision) {
+    const cls = node.proxy_decision === 'ALLOW' ? 'allow' : node.proxy_decision === 'DENY' ? 'deny' : 'gate';
+    decisionBadge = `<span class="decision-badge ${cls}">${node.proxy_decision}</span>`;
+  }
+
+  let snapHtml = '';
+  if (snap) {
+    snapHtml = `
+      <div class="snap-detail">
+        <div class="snap-row"><span>CER</span><span class="snap-val ${snap.cer < 0.3 ? 'critical' : snap.cer < 0.6 ? 'warn' : 'ok'}">${snap.cer.toFixed(4)}</span></div>
+        <div class="snap-row"><span>Skills</span><span class="snap-val">${(snap.skills || []).join(', ') || 'none'}</span></div>
+        <div class="snap-row"><span>Messages</span><span class="snap-val">${snap.message_count}</span></div>
+        <div class="snap-row"><span>Token Est.</span><span class="snap-val">${snap.token_estimate.toLocaleString()}</span></div>
+        <div class="snap-row"><span>CLAUDE.md</span><span class="snap-val">${snap.claude_md_size > 0 ? `${snap.claude_md_size}B [${snap.claude_md_hash}]` : '—'}</span></div>
+      </div>
+    `;
+  }
+
+  detailEl.innerHTML = `
+    <div class="step-header">
+      <span class="step-type ${node.event_type}">${node.event_type.toUpperCase()}</span>
+      ${decisionBadge}
+      <span class="step-time">${new Date(node.timestamp).toLocaleTimeString()}</span>
+      <span class="step-actor">${node.actor}</span>
+      ${step.is_branch_point ? '<span class="branch-marker">⑂ BRANCH POINT</span>' : ''}
+    </div>
+    <div class="step-data">
+      <pre>${JSON.stringify(node.data, null, 2)}</pre>
+    </div>
+    ${snapHtml}
+  `;
+
+  // Update CER trend highlight
+  highlightCerStep(stepNum);
+}
+
+function setReplaySpeed(ms) {
+  replaySpeed = parseInt(ms);
+  if (replayPlaying) {
+    clearInterval(replayTimer);
+    replayTimer = setInterval(() => {
+      if (replayCurrentStep < replaySteps.length - 1) {
+        replayStep(1);
+      } else {
+        replayPlaying = false;
+        clearInterval(replayTimer);
+        document.getElementById('btn-replay-play').textContent = '▶';
+      }
+    }, replaySpeed);
+  }
+}
+
+// ─── Timeline Visualization ────────────────────────────────────
+
+function renderTimelineVis(steps) {
+  const container = document.getElementById('timeline-vis');
+  if (!steps.length) {
+    container.innerHTML = '<div class="result-placeholder">No nodes in this timeline</div>';
+    return;
+  }
+
+  const typeColors = {
+    chat: '#00E5FF',
+    tool_call: '#FFB300',
+    terminal: '#B388FF',
+    branch_point: '#FF3D71',
+  };
+
+  container.innerHTML = `
+    <div class="tl-track">
+      ${steps.map((s, i) => {
+        const color = typeColors[s.node.event_type] || '#555';
+        const decision = s.node.proxy_decision;
+        const ring = decision === 'DENY' ? 'deny-ring' : decision === 'HUMAN_GATE' ? 'gate-ring' : '';
+        const branchClass = s.is_branch_point ? 'branch-point' : '';
+        return `
+          <div class="tl-node ${ring} ${branchClass} ${i === replayCurrentStep ? 'current' : ''}"
+               style="--node-color: ${color}"
+               onclick="replayJump(${i})"
+               title="Step ${i}: ${s.node.event_type}${decision ? ' [' + decision + ']' : ''}">
+            <div class="tl-dot"></div>
+            <div class="tl-label">${i}</div>
+          </div>
+        `;
+      }).join('<div class="tl-connector"></div>')}
+    </div>
+  `;
+}
+
+// ─── CER Trend Chart ──────────────────────────────────────────
+
+function renderCerTrend(steps) {
+  const canvas = document.getElementById('cer-trend-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Collect CER values from snapshots
+  const cerValues = steps.map(s => s.snapshot?.cer ?? null);
+  const hasCer = cerValues.some(v => v !== null);
+  if (!hasCer) {
+    ctx.fillStyle = '#444';
+    ctx.font = '14px IBM Plex Mono';
+    ctx.fillText('No CER snapshots available for this timeline', 20, H / 2);
+    return;
+  }
+
+  const padding = { left: 50, right: 20, top: 15, bottom: 25 };
+  const plotW = W - padding.left - padding.right;
+  const plotH = H - padding.top - padding.bottom;
+
+  // Background
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines at 0.3 and 0.6 thresholds
+  ctx.strokeStyle = '#1a1a2e';
+  ctx.lineWidth = 1;
+  [0.3, 0.6, 1.0].forEach(v => {
+    const y = padding.top + plotH * (1 - v);
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(W - padding.right, y);
+    ctx.stroke();
+    ctx.fillStyle = '#555';
+    ctx.font = '10px IBM Plex Mono';
+    ctx.fillText(v.toFixed(1), 5, y + 4);
+  });
+
+  // Danger zone (CER < 0.3)
+  const y03 = padding.top + plotH * 0.7;
+  ctx.fillStyle = 'rgba(255, 61, 113, 0.08)';
+  ctx.fillRect(padding.left, y03, plotW, plotH * 0.3);
+
+  // Warning zone (0.3 - 0.6)
+  const y06 = padding.top + plotH * 0.4;
+  ctx.fillStyle = 'rgba(255, 179, 0, 0.05)';
+  ctx.fillRect(padding.left, y06, plotW, y03 - y06);
+
+  // Plot CER line
+  ctx.beginPath();
+  ctx.lineWidth = 2;
+  let first = true;
+  const stepW = plotW / Math.max(cerValues.length - 1, 1);
+
+  cerValues.forEach((v, i) => {
+    if (v === null) return;
+    const x = padding.left + i * stepW;
+    const y = padding.top + plotH * (1 - Math.min(v, 1));
+    if (first) { ctx.moveTo(x, y); first = false; }
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#00E5FF';
+  ctx.stroke();
+
+  // Dots
+  cerValues.forEach((v, i) => {
+    if (v === null) return;
+    const x = padding.left + i * stepW;
+    const y = padding.top + plotH * (1 - Math.min(v, 1));
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = v < 0.3 ? '#FF3D71' : v < 0.6 ? '#FFB300' : '#00E676';
+    ctx.fill();
+  });
+
+  // Step labels along bottom
+  ctx.fillStyle = '#555';
+  ctx.font = '9px IBM Plex Mono';
+  const labelEvery = Math.max(1, Math.floor(cerValues.length / 15));
+  cerValues.forEach((_, i) => {
+    if (i % labelEvery === 0) {
+      const x = padding.left + i * stepW;
+      ctx.fillText(i.toString(), x - 3, H - 5);
+    }
+  });
+}
+
+function highlightCerStep(stepNum) {
+  // Re-render with highlight line
+  const canvas = document.getElementById('cer-trend-canvas');
+  if (!canvas || !replaySteps.length) return;
+
+  renderCerTrend(replaySteps);
+
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const padding = { left: 50, right: 20, top: 15, bottom: 25 };
+  const plotW = W - padding.left - padding.right;
+  const stepW = plotW / Math.max(replaySteps.length - 1, 1);
+  const x = padding.left + stepNum * stepW;
+
+  ctx.strokeStyle = '#00E5FF';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x, padding.top);
+  ctx.lineTo(x, H - padding.bottom);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// ─── Branch & Diff ────────────────────────────────────────────
+
+async function branchFromCurrent() {
+  if (!replaySelectedTimeline || replayCurrentStep < 0) return;
+  const step = replaySteps[replayCurrentStep];
+  if (!step) return;
+
+  const name = prompt('Branch name:', `Branch from step ${replayCurrentStep}`);
+  if (!name) return;
+
+  try {
+    const resp = await fetch(`${API.replay}/api/v1/branch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_timeline_id: replaySelectedTimeline,
+        branch_from_node_id: step.node.id,
+        name: name,
+      }),
+    });
+    const data = await resp.json();
+    alert(`Branch created: ${data.branch?.id || 'unknown'}\n${data.message || ''}`);
+    loadTimelines();
+  } catch (err) {
+    alert(`Branch failed: ${err.message}`);
+  }
+}
+
+async function showDiffModal() {
+  if (replayTimelines.length < 2) return;
+
+  const other = prompt(
+    `Enter timeline ID to diff against ${replaySelectedTimeline}:\n\n` +
+    replayTimelines.filter(t => t.id !== replaySelectedTimeline)
+      .map(t => `  ${t.id} — ${t.name}`).join('\n')
+  );
+  if (!other) return;
+
+  try {
+    const resp = await fetch(`${API.replay}/api/v1/diff?timeline_a=${replaySelectedTimeline}&timeline_b=${other}`);
+    const diff = await resp.json();
+
+    let html = `
+      <div class="diff-result">
+        <div class="diff-header">DIFF: ${diff.timeline_a} ↔ ${diff.timeline_b}</div>
+        <div class="diff-stats">
+          <span>Shared: <b>${diff.shared_nodes}</b></span>
+          <span>Unique A: <b>${diff.unique_a}</b></span>
+          <span>Unique B: <b>${diff.unique_b}</b></span>
+          ${diff.divergence_node ? `<span>Diverges at: <b>${diff.divergence_node}</b></span>` : ''}
+        </div>
+    `;
+
+    if (diff.decision_changes?.length) {
+      html += '<div class="diff-decisions"><h4>Decision Changes:</h4>';
+      diff.decision_changes.forEach(dc => {
+        html += `<div class="diff-change">Step ${dc.sequence}: ${dc.tool || dc.event} — <span class="deny">${dc.decision_a}</span> → <span class="allow">${dc.decision_b}</span></div>`;
+      });
+      html += '</div>';
+    }
+
+    if (diff.cer_comparison?.length) {
+      html += '<div class="diff-cer"><h4>CER Comparison:</h4>';
+      diff.cer_comparison.slice(0, 10).forEach(c => {
+        html += `<div class="diff-cer-row">Step ${c.sequence}: A=${c.cer_a.toFixed(3)} B=${c.cer_b.toFixed(3)} Δ=${c.delta > 0 ? '+' : ''}${c.delta.toFixed(4)}</div>`;
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+    document.getElementById('replay-step-detail').innerHTML = html;
+  } catch (err) {
+    alert(`Diff failed: ${err.message}`);
+  }
+}
+
+// ─── Replay Helpers ────────────────────────────────────────────
+
+function formatTimeAgo(isoStr) {
+  if (!isoStr) return '';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Connect replay WebSocket for live updates
+function connectReplayWs() {
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    replayWs = new WebSocket(`${proto}://${location.host}/ws/replay/`);
+    replayWs.onmessage = (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.type === 'node' && data.timeline_id === replaySelectedTimeline) {
+        // Live node arrived — refresh if on replay tab
+        if (document.getElementById('tab-replay')?.classList.contains('active')) {
+          selectTimeline(replaySelectedTimeline);
+        }
+      }
+    };
+    replayWs.onclose = () => setTimeout(connectReplayWs, 5000);
+  } catch {}
 }
 
 // ─── Utilities ───────────────────────────────────────────────────

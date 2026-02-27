@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 
 AGENT_PROXY_URL = os.getenv("AGENT_PROXY_URL", "http://agent-proxy:8400")
 FLIGHT_RECORDER_URL = os.getenv("FLIGHT_RECORDER_URL", "http://flight-recorder:8402")
+REPLAY_ENGINE_URL = os.getenv("REPLAY_ENGINE_URL", "http://replay-engine:8404")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/workspace")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")  # mock | deepseek | openai | anthropic | ollama
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -638,6 +639,80 @@ class EventLogger:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Replay Client (sends timeline events to ReplayEngine)
+# ═══════════════════════════════════════════════════════════════
+
+class ReplayClient:
+    """Sends snapshot events to ReplayEngine for timeline recording."""
+
+    def __init__(self):
+        self.client = httpx.AsyncClient(timeout=5.0)
+        self.enabled = True
+
+    async def record(self, session_id: str, event_type: str, data: dict,
+                     kernel_state=None, proxy_decision: str | None = None):
+        """Record an event as a timeline node in ReplayEngine."""
+        if not self.enabled:
+            return None
+        try:
+            kernel_snapshot = None
+            if kernel_state:
+                kernel_snapshot = {
+                    "cer": kernel_state.cer,
+                    "skills": kernel_state.skills,
+                    "has_claude_md": kernel_state.claude_md is not None,
+                    "has_todo_md": kernel_state.todo_md is not None,
+                    "has_lessons_md": kernel_state.lessons_md is not None,
+                }
+            resp = await self.client.post(
+                f"{REPLAY_ENGINE_URL}/api/v1/record/event",
+                json={
+                    "session_id": session_id,
+                    "event_type": event_type,
+                    "actor": "openclaw",
+                    "data": data,
+                    "kernel_snapshot": kernel_snapshot,
+                    "proxy_decision": proxy_decision,
+                },
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                # Also record kernel snapshot
+                if kernel_state and result.get("node_id") and result.get("timeline_id"):
+                    await self._record_snapshot(result["timeline_id"], result["node_id"], kernel_state, session_id)
+                return result
+        except Exception:
+            pass  # Don't block agent on replay failures
+        return None
+
+    async def _record_snapshot(self, timeline_id: str, node_id: str,
+                               kernel_state, session_id: str):
+        try:
+            await self.client.post(
+                f"{REPLAY_ENGINE_URL}/api/v1/snapshot/record",
+                json={
+                    "timeline_id": timeline_id,
+                    "node_id": node_id,
+                    "cer": kernel_state.cer,
+                    "skills": kernel_state.skills,
+                    "claude_md_hash": hashlib.sha256((kernel_state.claude_md or "").encode()).hexdigest()[:12],
+                    "todo_md_hash": hashlib.sha256((kernel_state.todo_md or "").encode()).hexdigest()[:12],
+                    "lessons_md_hash": hashlib.sha256((kernel_state.lessons_md or "").encode()).hexdigest()[:12],
+                    "claude_md_size": len(kernel_state.claude_md) if kernel_state.claude_md else 0,
+                    "todo_md_size": len(kernel_state.todo_md) if kernel_state.todo_md else 0,
+                    "lessons_md_size": len(kernel_state.lessons_md) if kernel_state.lessons_md else 0,
+                    "message_count": len(sessions.get(session_id, [])),
+                    "token_estimate": sum(len(m.content) // 4 for m in sessions.get(session_id, [])),
+                },
+            )
+        except Exception:
+            pass
+
+    async def close(self):
+        await self.client.aclose()
+
+
+# ═══════════════════════════════════════════════════════════════
 # FastAPI Application
 # ═══════════════════════════════════════════════════════════════
 
@@ -658,6 +733,7 @@ app.add_middleware(
 kernel = MarkdownKernel(WORKSPACE_DIR)
 tool_executor = ToolExecutor()
 event_logger = EventLogger()
+replay_client = ReplayClient()
 
 # Select LLM provider
 if LLM_PROVIDER == "deepseek" and DEEPSEEK_API_KEY:
@@ -796,6 +872,22 @@ async def chat(req: ChatRequest):
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     await broadcast(ws_event)
+
+    # ─── Replay: record chat step ───
+    await replay_client.record(
+        session_id=req.session_id,
+        event_type="chat",
+        data={
+            "user_message": req.message[:500],
+            "response_length": len(response_text),
+            "tool_calls": [
+                {"tool": tr.tool, "decision": tr.decision}
+                for tr in tool_results
+            ],
+            "latency_ms": round(latency, 2),
+        },
+        kernel_state=kernel_state,
+    )
 
     return ChatResponse(
         message=response_text,
@@ -1063,6 +1155,18 @@ async def websocket_terminal(websocket: WebSocket):
                     )
 
             stats["total_chats"] += 1
+
+            # ─── Replay: record terminal step ───
+            await replay_client.record(
+                session_id=session_id,
+                event_type="terminal",
+                data={
+                    "command": command[:500],
+                    "tool_calls": len(tool_calls) if tool_calls else 0,
+                },
+                kernel_state=kernel_state if 'kernel_state' in dir() else None,
+            )
+
             await websocket.send_json({"type": "prompt", "data": "\x1b[32mopenclaw\x1b[0m:\x1b[34m~\x1b[0m$ "})
 
             # Keep terminal history manageable
@@ -1150,9 +1254,11 @@ async def startup():
     print(f"  CER: {kernel_state.cer:.4f}")
     print(f"  AgentProxy: {AGENT_PROXY_URL}")
     print(f"  FlightRecorder: {FLIGHT_RECORDER_URL}")
+    print(f"  ReplayEngine: {REPLAY_ENGINE_URL}")
     print(f"══════════════════════════════════════════════")
 
 @app.on_event("shutdown")
 async def shutdown():
     await tool_executor.close()
     await event_logger.close()
+    await replay_client.close()

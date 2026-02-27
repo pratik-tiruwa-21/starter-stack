@@ -88,6 +88,7 @@ services:
     environment:
       - AGENT_PROXY_URL=http://agent-proxy:8400
       - FLIGHT_RECORDER_URL=http://flight-recorder:8402
+      - REPLAY_ENGINE_URL=http://replay-engine:8404
       - WORKSPACE_DIR=/workspace/agent
       - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
@@ -102,6 +103,8 @@ services:
         condition: service_healthy
       flight-recorder:
         condition: service_healthy
+      replay-engine:
+        condition: service_healthy
     networks:
       - platform-net
     restart: unless-stopped
@@ -114,6 +117,33 @@ services:
     labels:
       com.clawdcontext.layer: "agent"
       com.clawdcontext.component: "openclaw"
+
+  # ═══ Layer 5→6: ReplayEngine (Live Agent Replay) ═══
+  replay-engine:
+    build: ./platform/replay-engine
+    container_name: ccos-replay-engine
+    ports:
+      - "8404:8404"
+    environment:
+      - FLIGHT_RECORDER_URL=http://flight-recorder:8402
+      - REPLAY_DATA_DIR=/data
+    volumes:
+      - replay-data:/data
+    depends_on:
+      flight-recorder:
+        condition: service_healthy
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8404/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    labels:
+      com.clawdcontext.layer: "5-6"
+      com.clawdcontext.component: "replay-engine"
 
   # ═══ Dashboard (Mission Control) ═══
   dashboard:
@@ -130,6 +160,8 @@ services:
         condition: service_healthy
       openclaw:
         condition: service_healthy
+      replay-engine:
+        condition: service_healthy
     networks:
       - platform-net
     restart: unless-stopped
@@ -142,6 +174,9 @@ services:
     labels:
       com.clawdcontext.layer: "0"
       com.clawdcontext.component: "dashboard"
+
+volumes:
+  replay-data:
 
 networks:
   platform-net:

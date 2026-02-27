@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
-  <link rel="stylesheet" href="style.css?v=20260226b">
+  <link rel="stylesheet" href="style.css?v=20260227a">
 </head>
 <body>
   <!-- Boot Sequence Overlay -->
@@ -41,6 +41,7 @@
           <div class="light" id="light-proxy" title="AgentProxy"><span class="light-dot"></span>PROXY</div>
           <div class="light" id="light-scanner" title="Scanner"><span class="light-dot"></span>SCAN</div>
           <div class="light" id="light-recorder" title="FlightRecorder"><span class="light-dot"></span>REC</div>
+          <div class="light" id="light-replay" title="ReplayEngine"><span class="light-dot"></span>RPL</div>
         </div>
       </div>
       <div class="topbar-right">
@@ -59,6 +60,7 @@
       <button class="tab" data-tab="scanner" onclick="switchTab('scanner')">⊘ SCANNER</button>
       <button class="tab" data-tab="audit" onclick="switchTab('audit')">▤ AUDIT LOG</button>
       <button class="tab" data-tab="skills" onclick="switchTab('skills')">⚙ SKILLS</button>
+      <button class="tab" data-tab="replay" onclick="switchTab('replay')">▶ REPLAY</button>
     </nav>
 
     <!-- Content Panels -->
@@ -338,6 +340,77 @@
           <div id="skills-list" class="skills-list"></div>
         </div>
       </section>
+
+      <!-- REPLAY TAB -->
+      <section id="tab-replay" class="tab-content">
+        <div class="grid-2">
+          <!-- Timeline Selector -->
+          <div class="panel">
+            <div class="panel-header">
+              AGENT TIMELINES
+              <div class="header-actions">
+                <button class="btn-small" onclick="loadTimelines()">↻ REFRESH</button>
+              </div>
+            </div>
+            <div id="replay-stats" class="replay-stats"></div>
+            <div id="timeline-list" class="timeline-list"></div>
+          </div>
+
+          <!-- Replay Controls -->
+          <div class="panel">
+            <div class="panel-header">REPLAY CONTROLS</div>
+            <div id="replay-controls" class="replay-controls">
+              <div class="replay-transport">
+                <button class="btn-transport" id="btn-replay-start" onclick="replayJump(0)" disabled>⏮</button>
+                <button class="btn-transport" id="btn-replay-back" onclick="replayStep(-1)" disabled>⏪</button>
+                <button class="btn-transport btn-play" id="btn-replay-play" onclick="replayToggle()" disabled>▶</button>
+                <button class="btn-transport" id="btn-replay-fwd" onclick="replayStep(1)" disabled>⏩</button>
+                <button class="btn-transport" id="btn-replay-end" onclick="replayJump(-1)" disabled>⏭</button>
+              </div>
+              <div class="replay-speed">
+                <label>Speed:</label>
+                <select id="replay-speed" onchange="setReplaySpeed(this.value)">
+                  <option value="2000">0.5×</option>
+                  <option value="1000" selected>1×</option>
+                  <option value="500">2×</option>
+                  <option value="250">4×</option>
+                </select>
+              </div>
+              <div class="replay-position">
+                <span id="replay-step-num">—</span>
+                <span class="replay-sep">/</span>
+                <span id="replay-step-total">—</span>
+              </div>
+            </div>
+            <!-- Step Detail -->
+            <div id="replay-step-detail" class="replay-step-detail">
+              <div class="result-placeholder">Select a timeline and press ▶ to begin replay</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Timeline Visualization -->
+        <div class="panel full-width">
+          <div class="panel-header">
+            TIMELINE VISUALIZATION
+            <div class="header-actions">
+              <button class="btn-small" id="btn-branch" onclick="branchFromCurrent()" disabled>⑂ BRANCH</button>
+              <button class="btn-small" id="btn-diff" onclick="showDiffModal()" disabled>⇄ DIFF</button>
+            </div>
+          </div>
+          <div id="timeline-vis" class="timeline-vis">
+            <div class="result-placeholder">Timeline nodes will appear here during replay</div>
+          </div>
+        </div>
+
+        <!-- CER Trend (during replay) -->
+        <div class="panel full-width">
+          <div class="panel-header">CER TREND OVER SESSION</div>
+          <div id="cer-trend" class="cer-trend">
+            <canvas id="cer-trend-canvas" width="900" height="120"></canvas>
+          </div>
+        </div>
+      </section>
     </main>
 
     <!-- Footer -->
@@ -351,6 +424,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-  <script src="app.js?v=20260226b"></script>
+  <script src="app.js?v=20260227a"></script>
 </body>
 </html>
