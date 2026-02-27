@@ -11,29 +11,35 @@
 
 services:
 
-  # ═══ Layer 4: AgentProxy (Reference Monitor) ═══
+  # ═══ Layer 4: AgentProxy (Reference Monitor) — Go ═══
   agent-proxy:
-    build: ./platform/agent-proxy
+    build: ./platform/agent-proxy-go
     container_name: ccos-agent-proxy
     ports:
       - "8400:8400"
     environment:
       - SKILLS_DIR=/workspace/agent/skills
-      - LOG_LEVEL=info
+      - PROXY_PORT=8400
+      - MAX_RATE_RPM=120
+      - CER_WARN=0.4
+      - CER_CRIT=0.2
+      - AUDIT_FILE=/data/audit/chain.jsonl
     volumes:
       - ./agent/skills:/workspace/agent/skills:ro
+      - proxy-audit:/data/audit
     networks:
       - platform-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8400/healthz')"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8400/healthz"]
       interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 10s
+      start_period: 5s
     labels:
       com.clawdcontext.layer: "4"
       com.clawdcontext.component: "agent-proxy"
+      com.clawdcontext.runtime: "go"
 
   # ═══ Layer 1: Scanner API (TTP Detection) ═══
   scanner-api:
@@ -177,6 +183,7 @@ services:
 
 volumes:
   replay-data:
+  proxy-audit:
 
 networks:
   platform-net:

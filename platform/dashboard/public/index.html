@@ -244,43 +244,172 @@
       </section>
 
       <section id="tab-proxy" class="tab-content">
+        <!-- ── Row 1: Real-time metrics ── -->
+        <div class="proxy-metrics-row">
+          <div class="metric-card">
+            <div class="metric-label">THROUGHPUT</div>
+            <div class="metric-value" id="pm-rps">0.0</div>
+            <div class="metric-unit">req/s</div>
+            <canvas id="spark-rps" class="sparkline" width="120" height="32"></canvas>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">P99 LATENCY</div>
+            <div class="metric-value" id="pm-p99">0</div>
+            <div class="metric-unit">&mu;s</div>
+            <canvas id="spark-latency" class="sparkline" width="120" height="32"></canvas>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">DENY RATE</div>
+            <div class="metric-value" id="pm-deny">0.0</div>
+            <div class="metric-unit">%</div>
+            <canvas id="spark-deny" class="sparkline" width="120" height="32"></canvas>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">CER</div>
+            <div class="metric-value" id="pm-cer">1.000</div>
+            <div class="metric-unit">ratio</div>
+            <div class="cer-gauge-container">
+              <div class="cer-gauge-track">
+                <div class="cer-gauge-fill" id="cer-gauge-fill"></div>
+              </div>
+              <div class="cer-gauge-markers">
+                <span class="cer-marker crit">0.2</span>
+                <span class="cer-marker warn">0.4</span>
+                <span class="cer-marker ok">1.0</span>
+              </div>
+            </div>
+          </div>
+          <div class="metric-card metric-card-wide">
+            <div class="metric-label">EVALUATIONS</div>
+            <div class="metric-counters">
+              <div class="mc"><span class="mc-val" id="pm-total">0</span><span class="mc-label">total</span></div>
+              <div class="mc allowed"><span class="mc-val" id="pm-allowed">0</span><span class="mc-label">allowed</span></div>
+              <div class="mc denied"><span class="mc-val" id="pm-denied">0</span><span class="mc-label">denied</span></div>
+              <div class="mc gated"><span class="mc-val" id="pm-gated">0</span><span class="mc-label">gated</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Row 2: Pipeline + Evaluate ── -->
         <div class="grid-2">
+          <!-- Gate Pipeline Visualization -->
+          <div class="panel">
+            <div class="panel-header">5-GATE PIPELINE <span class="hdr-badge" id="pipeline-status">IDLE</span></div>
+            <div class="gate-pipeline" id="gate-pipeline">
+              <div class="gate-node" id="gn-rate_limit">
+                <div class="gate-icon">⏱</div>
+                <div class="gate-name">RATE LIMIT</div>
+                <div class="gate-bar"><div class="gate-bar-fill" id="gb-rate_limit"></div></div>
+                <div class="gate-latency" id="gl-rate_limit">—</div>
+              </div>
+              <div class="gate-connector"><div class="gate-connector-line"></div></div>
+              <div class="gate-node" id="gn-human_gate">
+                <div class="gate-icon">👤</div>
+                <div class="gate-name">HUMAN GATE</div>
+                <div class="gate-bar"><div class="gate-bar-fill" id="gb-human_gate"></div></div>
+                <div class="gate-latency" id="gl-human_gate">—</div>
+              </div>
+              <div class="gate-connector"><div class="gate-connector-line"></div></div>
+              <div class="gate-node" id="gn-capability">
+                <div class="gate-icon">🔑</div>
+                <div class="gate-name">CAPABILITY</div>
+                <div class="gate-bar"><div class="gate-bar-fill" id="gb-capability"></div></div>
+                <div class="gate-latency" id="gl-capability">—</div>
+              </div>
+              <div class="gate-connector"><div class="gate-connector-line"></div></div>
+              <div class="gate-node" id="gn-scanner">
+                <div class="gate-icon">🛡</div>
+                <div class="gate-name">TTP SCANNER</div>
+                <div class="gate-bar"><div class="gate-bar-fill" id="gb-scanner"></div></div>
+                <div class="gate-latency" id="gl-scanner">—</div>
+              </div>
+              <div class="gate-connector"><div class="gate-connector-line"></div></div>
+              <div class="gate-node" id="gn-cer">
+                <div class="gate-icon">📊</div>
+                <div class="gate-name">CER CHECK</div>
+                <div class="gate-bar"><div class="gate-bar-fill" id="gb-cer"></div></div>
+                <div class="gate-latency" id="gl-cer">—</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Evaluate Form (redesigned) -->
           <div class="panel">
             <div class="panel-header">EVALUATE TOOL CALL</div>
             <form id="eval-form" class="form">
-              <div class="form-group">
-                <label>Skill</label>
-                <select id="eval-skill" class="input">
-                  <option value="web-search">web-search</option>
-                  <option value="file-writer">file-writer</option>
-                  <option value="_malicious">_malicious (poisoned)</option>
-                </select>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Skill</label>
+                  <select id="eval-skill" class="input">
+                    <option value="web-search">web-search</option>
+                    <option value="file-writer">file-writer</option>
+                    <option value="_malicious">_malicious (poisoned)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Tool</label>
+                  <input id="eval-tool" class="input" value="file_read:/workspace/data.txt" placeholder="e.g. file_read:/workspace/*">
+                </div>
               </div>
               <div class="form-group">
-                <label>Tool</label>
-                <input id="eval-tool" class="input" value="file_read:/workspace/data.txt" placeholder="e.g. file_read:/workspace/*">
-              </div>
-              <div class="form-group">
-                <label>Context</label>
-                <textarea id="eval-context" class="input textarea" rows="3" placeholder="Prompt context..."></textarea>
+                <label>Context / Arguments</label>
+                <textarea id="eval-context" class="input textarea" rows="2" placeholder="Prompt context or tool arguments..."></textarea>
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label>Tokens Used</label>
+                  <label>Tokens</label>
                   <input id="eval-tokens" class="input" type="number" value="50000">
                 </div>
                 <div class="form-group">
-                  <label>Token Budget</label>
+                  <label>Budget</label>
                   <input id="eval-budget" class="input" type="number" value="200000">
                 </div>
+                <div class="form-group" style="display:flex;align-items:flex-end">
+                  <button type="submit" class="btn-action" style="width:100%">EVALUATE</button>
+                </div>
               </div>
-              <button type="submit" class="btn-action">EVALUATE</button>
             </form>
+            <!-- Verdict (inline) -->
+            <div id="eval-result" class="result-display">
+              <div class="result-placeholder">Submit a tool call to see the 5-gate verdict</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Row 3: Live event stream + Gate stats ── -->
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-header">LIVE EVENT STREAM <span class="event-count" id="proxy-event-count">0</span></div>
+            <div class="event-stream" id="proxy-events"></div>
           </div>
           <div class="panel">
-            <div class="panel-header">VERDICT</div>
-            <div id="eval-result" class="result-display">
-              <div class="result-placeholder">Submit a tool call to see the AgentProxy verdict</div>
+            <div class="panel-header">GATE LATENCY BREAKDOWN</div>
+            <div class="gate-stats" id="gate-stats">
+              <div class="gate-stat-row">
+                <span class="gs-name">rate_limit</span>
+                <div class="gs-bar-track"><div class="gs-bar" id="gs-rate_limit" style="width:0%"></div></div>
+                <span class="gs-val" id="gsv-rate_limit">—</span>
+              </div>
+              <div class="gate-stat-row">
+                <span class="gs-name">human_gate</span>
+                <div class="gs-bar-track"><div class="gs-bar" id="gs-human_gate" style="width:0%"></div></div>
+                <span class="gs-val" id="gsv-human_gate">—</span>
+              </div>
+              <div class="gate-stat-row">
+                <span class="gs-name">capability</span>
+                <div class="gs-bar-track"><div class="gs-bar" id="gs-capability" style="width:0%"></div></div>
+                <span class="gs-val" id="gsv-capability">—</span>
+              </div>
+              <div class="gate-stat-row">
+                <span class="gs-name">scanner</span>
+                <div class="gs-bar-track"><div class="gs-bar" id="gs-scanner" style="width:0%"></div></div>
+                <span class="gs-val" id="gsv-scanner">—</span>
+              </div>
+              <div class="gate-stat-row">
+                <span class="gs-name">cer</span>
+                <div class="gs-bar-track"><div class="gs-bar" id="gs-cer" style="width:0%"></div></div>
+                <span class="gs-val" id="gsv-cer">—</span>
+              </div>
             </div>
           </div>
         </div>

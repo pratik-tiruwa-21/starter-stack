@@ -219,6 +219,7 @@ function connectWebSocket() {
       const data = JSON.parse(event.data);
       if (data.type === 'evaluation') {
         addEvent(data);
+        addProxyEvent(data); // Feed into proxy tab's live stream
       }
     };
     ws.onclose = () => setTimeout(connectWebSocket, 3000);
@@ -273,6 +274,213 @@ function switchTab(tabId) {
 
 // ─── Evaluate Form ───────────────────────────────────────────────
 
+// ─── Proxy Metrics + Sparklines ─────────────────────────────────
+
+const proxyMetricsState = {
+  rpsHistory: [],
+  latencyHistory: [],
+  denyHistory: [],
+  eventCount: 0,
+  maxEvents: 100,
+};
+
+function drawSparkline(canvasId, data, color, maxVal) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width = canvas.offsetWidth * (window.devicePixelRatio || 1);
+  const h = canvas.height = canvas.offsetHeight * (window.devicePixelRatio || 1);
+  canvas.style.width = canvas.offsetWidth + 'px';
+  canvas.style.height = canvas.offsetHeight + 'px';
+  ctx.clearRect(0, 0, w, h);
+
+  if (data.length < 2) return;
+
+  const max = maxVal || Math.max(...data, 1);
+  const step = w / (data.length - 1);
+
+  // Area fill
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  data.forEach((v, i) => {
+    const x = i * step;
+    const y = h - (v / max) * h * 0.9;
+    if (i === 0) ctx.lineTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(w, h);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, color + '30');
+  grad.addColorStop(1, color + '05');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = i * step;
+    const y = h - (v / max) * h * 0.9;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5 * (window.devicePixelRatio || 1);
+  ctx.stroke();
+}
+
+async function fetchProxyMetrics() {
+  try {
+    const resp = await fetch(`${API.proxy}/api/v1/metrics`);
+    if (!resp.ok) return;
+    const m = await resp.json();
+
+    // Update metric values
+    const rps = m.rps_history?.slice(-1)[0] || 0;
+    const deny = m.deny_rate_history?.slice(-1)[0] || 0;
+    const cer = m.cer_history?.slice(-1)[0] || 1.0;
+
+    document.getElementById('pm-rps').textContent = rps.toFixed(1);
+    document.getElementById('pm-deny').textContent = (deny * 100).toFixed(1);
+    document.getElementById('pm-cer').textContent = cer.toFixed(3);
+
+    // CER gauge
+    const gaugeFill = document.getElementById('cer-gauge-fill');
+    if (gaugeFill) gaugeFill.style.width = (cer * 100) + '%';
+
+    // Sparklines
+    if (m.rps_history) drawSparkline('spark-rps', m.rps_history, '#00E5FF');
+    if (m.deny_rate_history) drawSparkline('spark-deny', m.deny_rate_history.map(v => v * 100), '#FF3D71');
+
+    // Gate latency stats
+    if (m.gate_latencies) {
+      const maxLatency = Math.max(...m.gate_latencies.map(g => g.avg_us || 0), 1);
+      m.gate_latencies.forEach(g => {
+        const bar = document.getElementById(`gs-${g.name}`);
+        const val = document.getElementById(`gsv-${g.name}`);
+        if (bar) bar.style.width = ((g.avg_us / maxLatency) * 100) + '%';
+        if (val) val.textContent = `${g.avg_us}µs avg / ${g.p99_us}µs p99`;
+      });
+    }
+  } catch { /* proxy not ready */ }
+}
+
+async function fetchProxyStatus() {
+  try {
+    const resp = await fetch(`${API.proxy}/api/v1/status`);
+    if (!resp.ok) return;
+    const s = await resp.json();
+
+    document.getElementById('pm-total').textContent = s.total_evaluations || 0;
+    document.getElementById('pm-allowed').textContent = s.allowed || 0;
+    document.getElementById('pm-denied').textContent = s.denied || 0;
+    document.getElementById('pm-gated').textContent = s.human_gated || 0;
+    document.getElementById('pm-p99').textContent = s.p99_latency_us || 0;
+  } catch { /* proxy not ready */ }
+}
+
+// Poll proxy metrics every 2s
+setInterval(() => {
+  fetchProxyMetrics();
+  fetchProxyStatus();
+}, 2000);
+
+// Initial load
+fetchProxyMetrics();
+fetchProxyStatus();
+
+// ─── Pipeline Animation ─────────────────────────────────────────
+
+function animatePipeline(gates) {
+  const badge = document.getElementById('pipeline-status');
+  const names = ['rate_limit', 'human_gate', 'capability', 'scanner', 'cer'];
+
+  // Reset all gates
+  names.forEach(n => {
+    const el = document.getElementById(`gn-${n}`);
+    if (el) el.className = 'gate-node';
+    const bar = document.getElementById(`gb-${n}`);
+    if (bar) bar.style.width = '0%';
+    const lat = document.getElementById(`gl-${n}`);
+    if (lat) lat.textContent = '—';
+  });
+
+  if (badge) { badge.className = 'hdr-badge running'; badge.textContent = 'RUNNING'; }
+
+  // Animate each gate sequentially
+  gates.forEach((gate, i) => {
+    setTimeout(() => {
+      const el = document.getElementById(`gn-${gate.name}`);
+      const bar = document.getElementById(`gb-${gate.name}`);
+      const lat = document.getElementById(`gl-${gate.name}`);
+
+      if (el) {
+        el.classList.add('active');
+        setTimeout(() => {
+          el.classList.remove('active');
+          if (gate.passed) {
+            el.classList.add('passed');
+          } else if (gate.name === 'human_gate' && !gate.passed) {
+            el.classList.add('gated');
+          } else {
+            el.classList.add('failed');
+          }
+        }, 200);
+      }
+
+      if (bar) bar.style.width = '100%';
+      if (lat) lat.textContent = `${gate.latency_us}µs`;
+
+      // Final gate — update badge
+      if (i === gates.length - 1) {
+        setTimeout(() => {
+          if (badge) {
+            const allPassed = gates.every(g => g.passed);
+            const hasGate = gates.some(g => g.name === 'human_gate' && !g.passed);
+            if (allPassed) { badge.className = 'hdr-badge allow'; badge.textContent = 'ALLOW'; }
+            else if (hasGate) { badge.className = 'hdr-badge'; badge.textContent = 'HUMAN_GATE'; badge.style.color = 'var(--amber)'; }
+            else { badge.className = 'hdr-badge deny'; badge.textContent = 'DENY'; }
+          }
+        }, 300);
+      }
+    }, i * 250);
+  });
+}
+
+// ─── Live Proxy Event Stream ────────────────────────────────────
+
+function addProxyEvent(event) {
+  const el = document.getElementById('proxy-events');
+  if (!el) return;
+
+  const dec = (event.decision || '').toLowerCase().replace('_', '-');
+  const time = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '';
+  const latency = event.latency_us ? `${event.latency_us}µs` : '';
+  const tool = event.tool || event.gate || '';
+
+  const line = document.createElement('div');
+  line.className = `event-line ${dec}`;
+  line.innerHTML = `
+    <span class="ev-time">${time}</span>
+    <span class="ev-decision ${dec}">${(event.decision || '').replace('_', '-')}</span>
+    <span class="ev-tool">${event.skill || ''}:${tool}</span>
+    <span class="ev-latency">${latency}</span>
+  `;
+
+  el.insertBefore(line, el.firstChild);
+  proxyMetricsState.eventCount++;
+
+  // Trim old events
+  while (el.children.length > proxyMetricsState.maxEvents) {
+    el.removeChild(el.lastChild);
+  }
+
+  const countEl = document.getElementById('proxy-event-count');
+  if (countEl) countEl.textContent = proxyMetricsState.eventCount;
+}
+
+// ─── Evaluate Form ───────────────────────────────────────────────
+
 document.getElementById('eval-form').addEventListener('submit', async (e) => {
   e.preventDefault();
 
@@ -293,7 +501,11 @@ document.getElementById('eval-form').addEventListener('submit', async (e) => {
     });
     const data = await resp.json();
     renderVerdict(data);
+    // Animate pipeline with gate results
+    if (data.gates) animatePipeline(data.gates);
     loadStatus(); // Refresh stats
+    fetchProxyMetrics();
+    fetchProxyStatus();
   } catch (err) {
     document.getElementById('eval-result').innerHTML = `<div class="result-placeholder" style="color: var(--red)">Error: ${err.message}. Is AgentProxy running?</div>`;
   }
@@ -301,30 +513,55 @@ document.getElementById('eval-form').addEventListener('submit', async (e) => {
 
 function renderVerdict(data) {
   const cls = data.decision.toLowerCase().replace('_', '-');
-  let checksHtml = '';
 
-  if (data.checks) {
-    checksHtml = '<div class="check-list">';
+  // Build gate results HTML
+  let gatesHtml = '';
+  if (data.gates && data.gates.length) {
+    gatesHtml = '<div class="check-list">';
+    data.gates.forEach(g => {
+      const icon = g.passed ? '✓' : '✗';
+      const iconClass = g.passed ? 'check-pass' : 'check-fail';
+      gatesHtml += `<div class="check-item">
+        <span class="check-icon ${iconClass}">${icon}</span>
+        <span class="check-name">${g.name}</span>
+        <span class="check-detail">${g.detail || ''}</span>
+        <span class="check-latency" style="margin-left:auto;font-size:10px;color:var(--text-dim)">${g.latency_us}µs</span>
+      </div>`;
+    });
+    gatesHtml += '</div>';
+  } else if (data.checks) {
+    gatesHtml = '<div class="check-list">';
     for (const [name, check] of Object.entries(data.checks)) {
       const icon = check.passed ? '✓' : '✗';
       const iconClass = check.passed ? 'check-pass' : 'check-fail';
-      checksHtml += `<div class="check-item">
+      gatesHtml += `<div class="check-item">
         <span class="check-icon ${iconClass}">${icon}</span>
         <span class="check-name">${name}</span>
         <span class="check-detail">${check.detail || ''}</span>
       </div>`;
     }
-    checksHtml += '</div>';
+    gatesHtml += '</div>';
   }
+
+  const latency = data.latency_us ? `${data.latency_us}µs` : data.latency_ms ? `${data.latency_ms.toFixed(2)}ms` : '—';
 
   document.getElementById('eval-result').innerHTML = `
     <div class="verdict ${cls}">
       <div class="verdict-decision">${data.decision}</div>
       <div class="verdict-reason">${data.reason}</div>
-      <div class="verdict-meta">Latency: ${data.latency_ms.toFixed(2)}ms | Audit: ${data.audit_hash || '—'}</div>
+      <div class="verdict-meta">Latency: ${latency} | Audit: ${data.audit_hash || '—'}</div>
     </div>
-    ${checksHtml}
+    ${gatesHtml}
   `;
+
+  // Also add to event stream
+  addProxyEvent({
+    decision: data.decision,
+    timestamp: new Date().toISOString(),
+    tool: document.getElementById('eval-tool').value,
+    skill: document.getElementById('eval-skill').value,
+    latency_us: data.latency_us,
+  });
 }
 
 // ─── Scan Form ───────────────────────────────────────────────────
