@@ -134,6 +134,7 @@
             <div class="panel-header">
               🐾 OPENCLAW AGENT
               <div class="header-actions">
+                <span id="openclaw-mode" class="sys-tag">DEMO</span>
                 <span id="openclaw-status" class="sys-tag">CONNECTING</span>
                 <button class="btn-small" onclick="clearChat()">CLEAR</button>
               </div>
@@ -141,24 +142,41 @@
             <div id="chat-messages" class="chat-messages">
               <div class="chat-msg assistant">
                 <div class="chat-role">OpenClaw</div>
-                <div class="chat-content">Welcome to ClawdContext OS. I'm OpenClaw — the AI agent runtime.<br>All my tool calls go through <strong>AgentProxy</strong> (Layer 4) and are logged by <strong>FlightRecorder</strong> (Layer 5).<br><br>Try: <code>read file CLAUDE.md</code> · <code>list files</code> · <code>search for security</code> · <code>help</code></div>
+                <div class="chat-content">Welcome to ClawdContext OS. I'm OpenClaw — the AI agent runtime.<br>All my tool calls go through <strong>AgentProxy</strong> (Layer 4) and are logged by <strong>FlightRecorder</strong> (Layer 5).<br><br>Try: <code>build a snake game in HTML</code> · <code>read file CLAUDE.md</code> · <code>list files</code> · <code>help</code></div>
               </div>
             </div>
             <form id="chat-form" class="chat-input-area">
-              <input id="chat-input" class="chat-input" type="text" placeholder="Talk to OpenClaw... (try: read file CLAUDE.md)" autocomplete="off">
+              <input id="chat-input" class="chat-input" type="text" placeholder="Talk to OpenClaw... (try: build a snake game in HTML)" autocomplete="off">
               <button type="submit" class="btn-action chat-send">SEND</button>
             </form>
           </div>
 
-          <!-- Kernel State -->
-          <div class="panel">
-            <div class="panel-header">MARKDOWN OS KERNEL</div>
-            <div id="kernel-state" class="kernel-state">
-              <div class="kernel-info">Loading kernel state...</div>
+          <!-- Right Column: Kernel + Preview -->
+          <div class="openclaw-sidebar">
+            <!-- Preview Panel (hidden by default, shown when code generates HTML) -->
+            <div id="preview-panel" class="panel preview-panel" style="display:none;">
+              <div class="panel-header">
+                📄 LIVE PREVIEW
+                <div class="header-actions">
+                  <button class="btn-small" onclick="openPreviewExternal()">↗ OPEN</button>
+                  <button class="btn-small" onclick="closePreview()">✕ CLOSE</button>
+                </div>
+              </div>
+              <div class="preview-container">
+                <iframe id="preview-iframe" class="preview-iframe" sandbox="allow-scripts allow-same-origin"></iframe>
+              </div>
             </div>
-            <div class="panel-header" style="margin-top: 16px;">AGENT STATS</div>
-            <div id="openclaw-stats" class="kernel-state">
-              <div class="kernel-info">Loading...</div>
+
+            <!-- Kernel State -->
+            <div class="panel">
+              <div class="panel-header">MARKDOWN OS KERNEL</div>
+              <div id="kernel-state" class="kernel-state">
+                <div class="kernel-info">Loading kernel state...</div>
+              </div>
+              <div class="panel-header" style="margin-top: 16px;">AGENT STATS</div>
+              <div id="openclaw-stats" class="kernel-state">
+                <div class="kernel-info">Loading...</div>
+              </div>
             </div>
           </div>
         </div>

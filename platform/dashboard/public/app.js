@@ -852,6 +852,11 @@ async function sendChatMessage(e) {
     const replyHtml = (typeof marked !== 'undefined') ? marked.parse(replyText) : escapeHtml(replyText);
     appendChatMsg('assistant', 'OpenClaw', replyHtml);
 
+    // Handle preview URL
+    if (data.preview_url) {
+      showPreview(data.preview_url);
+    }
+
     // Refresh sidebar stats
     loadOpenClawStats();
     loadKernelState();
@@ -887,8 +892,39 @@ function clearChat() {
   const container = document.getElementById('chat-messages');
   container.innerHTML = `<div class="chat-msg assistant">
     <div class="chat-role">OpenClaw</div>
-    <div class="chat-content">Chat cleared. Session continues. Try: <code>list files</code> · <code>read file CLAUDE.md</code></div>
+    <div class="chat-content">Chat cleared. Session continues. Try: <code>build a snake game</code> · <code>read file CLAUDE.md</code></div>
   </div>`;
+}
+
+// ─── Preview Panel ───────────────────────────────────────────
+
+let currentPreviewUrl = null;
+
+function showPreview(url) {
+  const panel = document.getElementById('preview-panel');
+  const iframe = document.getElementById('preview-iframe');
+  if (!panel || !iframe) return;
+
+  // Resolve relative URL to openclaw service
+  const fullUrl = url.startsWith('http') ? url : `${API.openclaw}${url}`;
+  currentPreviewUrl = fullUrl;
+
+  iframe.src = fullUrl;
+  panel.style.display = '';
+}
+
+function closePreview() {
+  const panel = document.getElementById('preview-panel');
+  const iframe = document.getElementById('preview-iframe');
+  if (panel) panel.style.display = 'none';
+  if (iframe) iframe.src = 'about:blank';
+  currentPreviewUrl = null;
+}
+
+function openPreviewExternal() {
+  if (currentPreviewUrl) {
+    window.open(currentPreviewUrl, '_blank');
+  }
 }
 
 async function loadKernelState() {
@@ -946,6 +982,14 @@ async function loadOpenClawStats() {
     const upHrs = Math.floor(data.uptime_seconds / 3600);
     const upMin = Math.floor((data.uptime_seconds % 3600) / 60);
 
+    // Update mode badge
+    const modeBadge = document.getElementById('openclaw-mode');
+    if (modeBadge) {
+      const isAI = data.provider === 'function_calling';
+      modeBadge.textContent = isAI ? 'AI' : 'DEMO';
+      modeBadge.style.background = isAI ? 'var(--green)' : 'var(--amber)';
+    }
+
     container.innerHTML = `
       <div class="kernel-item">
         <span class="kernel-icon loaded">💬</span>
@@ -965,7 +1009,7 @@ async function loadOpenClawStats() {
       <div class="kernel-item">
         <span class="kernel-icon loaded">🤖</span>
         <span class="kernel-file">LLM</span>
-        <span class="kernel-status">${data.provider}</span>
+        <span class="kernel-status">${data.provider}/${data.model || ''}</span>
       </div>
       <div class="kernel-item">
         <span class="kernel-icon loaded">⏱</span>
@@ -1127,6 +1171,9 @@ function connectTerminalWs() {
           term.clear();
         } else if (msg.type === 'system') {
           term.write(`\x1b[33m[sys] ${msg.data}\x1b[0m\r\n`);
+        } else if (msg.type === 'preview') {
+          // Open preview panel from terminal code execution
+          showPreview(msg.data);
         }
       } catch {}
     };

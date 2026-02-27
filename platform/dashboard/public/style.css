@@ -440,12 +440,36 @@ select.input { cursor: pointer; }
 
 .grid-openclaw {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  grid-template-columns: 1fr 380px;
   gap: 16px;
   height: calc(100vh - 180px);
 }
 
+.openclaw-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
 .chat-panel { display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Preview Panel ── */
+.preview-panel { display: flex; flex-direction: column; }
+.preview-container {
+  flex: 1;
+  min-height: 280px;
+  max-height: 420px;
+  background: #fff;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.preview-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
 
 .chat-messages {
   flex: 1;

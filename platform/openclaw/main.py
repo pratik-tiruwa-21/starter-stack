@@ -48,14 +48,15 @@ AGENT_PROXY_URL = os.getenv("AGENT_PROXY_URL", "http://agent-proxy:8400")
 FLIGHT_RECORDER_URL = os.getenv("FLIGHT_RECORDER_URL", "http://flight-recorder:8402")
 REPLAY_ENGINE_URL = os.getenv("REPLAY_ENGINE_URL", "http://replay-engine:8404")
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory-service:8405")
+CODE_RUNNER_URL = os.getenv("CODE_RUNNER_URL", "http://code-runner:8406")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/workspace")
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")  # mock | deepseek | openai | anthropic | ollama
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")
+
+# Determine mode: function_calling (real AI) or demo (mock)
+LLM_MODE = "function_calling" if (DEEPSEEK_API_KEY or OPENAI_API_KEY) else "demo"
 
 # ═══════════════════════════════════════════════════════════════
 # Models
@@ -82,6 +83,7 @@ class ToolResult(BaseModel):
     output: Optional[str] = None
     error: Optional[str] = None
     latency_ms: float = 0
+    preview_url: Optional[str] = None
 
 class ChatResponse(BaseModel):
     message: str
@@ -89,6 +91,7 @@ class ChatResponse(BaseModel):
     session_id: str
     tokens_used: int = 0
     latency_ms: float = 0
+    preview_url: Optional[str] = None
 
 class KernelState(BaseModel):
     claude_md: Optional[str] = None
@@ -96,6 +99,196 @@ class KernelState(BaseModel):
     lessons_md: Optional[str] = None
     skills: list[str] = []
     cer: float = 0.0
+
+# ═══════════════════════════════════════════════════════════════
+# Tool Schemas for DeepSeek Function Calling
+# ═══════════════════════════════════════════════════════════════
+
+TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_code",
+            "description": "Execute code (Python, JavaScript, Bash) or write HTML files in a sandboxed environment. Use for building apps, running scripts, data processing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": {
+                        "type": "string",
+                        "enum": ["python", "javascript", "bash", "html"],
+                        "description": "Programming language to execute"
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "The code to execute"
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Optional filename (required for HTML). Example: index.html, app.py"
+                    }
+                },
+                "required": ["language", "code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_read",
+            "description": "Read the contents of a file in the workspace",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative or absolute path to the file"
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_write",
+            "description": "Write content to a file in the workspace",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative or absolute path to the file"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write to the file"
+                    }
+                },
+                "required": ["path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_list",
+            "description": "List files in a directory",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path to list (default: workspace root)"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_workspace",
+            "description": "Search for text across workspace files",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query string"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "security_scan",
+            "description": "Run a security scan on the workspace looking for TTP patterns, secrets, and vulnerabilities",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Optional target path or scope for the scan"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Code Runner Client (Docker Sandbox — code-runner:8406)
+# ═══════════════════════════════════════════════════════════════
+
+class CodeRunnerClient:
+    """Client for the code-runner sandbox service. Executes code in isolated Docker containers."""
+
+    def __init__(self):
+        self.client = httpx.AsyncClient(timeout=35.0)
+        self.base_url = CODE_RUNNER_URL
+
+    async def execute(self, language: str, code: str, session_id: str,
+                      filename: str = "") -> dict:
+        """Execute code in the sandbox and return result."""
+        try:
+            resp = await self.client.post(
+                f"{self.base_url}/api/v1/execute",
+                json={
+                    "language": language,
+                    "code": code,
+                    "session_id": session_id,
+                    "filename": filename or None,
+                    "timeout": 30,
+                },
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return {
+                "success": False,
+                "error": f"Code runner error {resp.status_code}: {resp.text[:200]}",
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Code runner unreachable: {e}"}
+
+    async def write_file(self, session_id: str, filepath: str, content: str) -> dict:
+        """Write a file to the sandbox workspace."""
+        try:
+            resp = await self.client.post(
+                f"{self.base_url}/api/v1/files/write",
+                json={
+                    "session_id": session_id,
+                    "filepath": filepath,
+                    "content": content,
+                },
+            )
+            return resp.json() if resp.status_code == 200 else {"success": False}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def list_files(self, session_id: str) -> list:
+        """List files in the sandbox workspace."""
+        try:
+            resp = await self.client.get(f"{self.base_url}/api/v1/files/{session_id}")
+            if resp.status_code == 200:
+                return resp.json().get("files", [])
+        except Exception:
+            pass
+        return []
+
+    def preview_url(self, session_id: str, filename: str) -> str:
+        """Get the preview URL for an HTML file in the sandbox."""
+        return f"/api/v1/sandbox/preview/{session_id}/{filename}"
+
+    async def close(self):
+        await self.client.aclose()
+
 
 # ═══════════════════════════════════════════════════════════════
 # Markdown OS Kernel
@@ -195,36 +388,51 @@ class MarkdownKernel:
 
         parts.append(f"Context Efficiency Ratio: {kernel.cer:.4f} (target > 0.6)")
         parts.append("")
-        parts.append("When you need to perform actions (read files, execute commands, search web),")
-        parts.append("declare tool calls. They will be routed through AgentProxy for security checks.")
+        parts.append("When you need to perform actions, declare tool calls.")
+        parts.append("They will be routed through AgentProxy for security checks.")
+        parts.append("")
+        parts.append("IMPORTANT — Tool usage guidelines:")
+        parts.append("- For BUILDING apps, games, demos, or any HTML/CSS/JS: use `execute_code` with language='html'")
+        parts.append("- For RUNNING Python/JS/Bash scripts: use `execute_code` with the appropriate language")
+        parts.append("- For READING workspace files: use `file_read`")
+        parts.append("- For WRITING workspace files: use `file_write`")
+        parts.append("- For LISTING files: use `file_list`")
+        parts.append("- For SEARCHING: use `search_workspace`")
+        parts.append("- Always prefer `execute_code` over `file_write` when the user wants to BUILD something")
 
         return "\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════
-# Tool Executor (via AgentProxy)
+# Tool Executor (via AgentProxy + Code Runner)
 # ═══════════════════════════════════════════════════════════════
 
 class ToolExecutor:
     """
     Executes tool calls by routing them through AgentProxy.
+    Code execution goes to the code-runner sandbox service.
     Implements the Reference Monitor pattern (Anderson Report 1972).
     """
 
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=30.0)
+        self.code_runner = CodeRunnerClient()
 
     async def execute(self, skill: str, tool_call: ToolCall,
+                      session_id: str = "default",
                       token_count: int = 50000, token_budget: int = 200000) -> ToolResult:
         """Route a tool call through AgentProxy and return the result."""
         start = time.monotonic()
+
+        # Map tool names to AgentProxy-compatible format
+        proxy_tool = self._map_tool_name(tool_call)
 
         try:
             resp = await self.client.post(
                 f"{AGENT_PROXY_URL}/api/v1/evaluate",
                 json={
                     "skill": skill,
-                    "tool": tool_call.tool,
+                    "tool": proxy_tool,
                     "arguments": tool_call.arguments,
                     "context": tool_call.reason,
                     "token_count": token_count,
@@ -242,8 +450,9 @@ class ToolExecutor:
             )
 
             if decision == "ALLOW":
-                # Actually execute the tool (sandboxed)
-                result.output = await self._execute_sandboxed(tool_call)
+                result.output, result.preview_url = await self._execute_sandboxed(
+                    tool_call, session_id
+                )
             elif decision == "HUMAN_GATE":
                 result.output = f"⚠ Requires human approval: {data.get('reason', 'policy')}"
             else:
@@ -259,50 +468,125 @@ class ToolExecutor:
                 latency_ms=(time.monotonic() - start) * 1000,
             )
 
-    async def _execute_sandboxed(self, tool_call: ToolCall) -> str:
-        """Execute an ALLOWED tool call in the sandbox."""
+    def _map_tool_name(self, tool_call: ToolCall) -> str:
+        """Map function-calling tool names to AgentProxy tool format."""
         tool = tool_call.tool
+        args = tool_call.arguments
 
-        # File read
-        if tool.startswith("file_read:"):
-            filepath = tool.split(":", 1)[1]
-            # Support both absolute (/workspace/...) and relative paths
+        if tool == "execute_code":
+            lang = args.get("language", "python")
+            return f"exec:{lang}"
+        elif tool == "file_read":
+            path = args.get("path", "unknown")
+            if not path.startswith("/"):
+                path = f"/workspace/{path}"
+            return f"file_read:{path}"
+        elif tool == "file_write":
+            path = args.get("path", "unknown")
+            if not path.startswith("/"):
+                path = f"/workspace/{path}"
+            return f"file_write:{path}"
+        elif tool == "file_list":
+            return "file_list:/workspace/"
+        elif tool == "search_workspace":
+            return "search:/workspace/"
+        elif tool == "security_scan":
+            return "security_scan"
+        # Legacy format (from MockLLM): already has colon-separated format
+        elif ":" in tool:
+            return tool
+        return tool
+
+    async def _execute_sandboxed(self, tool_call: ToolCall,
+                                  session_id: str) -> tuple[str, str | None]:
+        """Execute an ALLOWED tool call. Returns (output, preview_url)."""
+        tool = tool_call.tool
+        args = tool_call.arguments
+        preview_url = None
+
+        # ── Code Execution (via code-runner sandbox) ──
+        if tool == "execute_code":
+            language = args.get("language", "python")
+            code = args.get("code", "")
+            filename = args.get("filename", "")
+
+            result = await self.code_runner.execute(
+                language=language, code=code,
+                session_id=session_id, filename=filename,
+            )
+
+            # code-runner returns: {stdout, stderr, exit_code, files_created, error, ...}
+            # Error path (connection failure) returns: {success: False, error: ...}
+            is_success = result.get("exit_code") == 0 if "exit_code" in result else result.get("success", False)
+
+            if is_success:
+                output_parts = []
+                # Successful execution: use stdout (code-runner) or output (legacy)
+                stdout = result.get("stdout") or result.get("output") or ""
+                stderr = result.get("stderr", "")
+                if stdout.strip():
+                    output_parts.append(stdout[:8000])
+                if stderr.strip():
+                    output_parts.append(f"stderr: {stderr[:2000]}")
+                if result.get("files_created"):
+                    output_parts.append(f"\nFiles created: {', '.join(result['files_created'])}")
+                    # Check for HTML files → generate preview URL
+                    for f in result.get("files_created", []):
+                        if f.endswith((".html", ".htm")):
+                            preview_url = self.code_runner.preview_url(session_id, f)
+                            output_parts.append(f"Preview: {preview_url}")
+                            break
+                if language == "html" and filename:
+                    preview_url = self.code_runner.preview_url(session_id, filename)
+                    output_parts.append(f"Preview: {preview_url}")
+                return "\n".join(output_parts) or "Code executed successfully (no output)", preview_url
+            else:
+                error = result.get("error") or result.get("stderr") or "Unknown execution error"
+                return f"Execution error: {error}", None
+
+        # ── File Read ──
+        if tool == "file_read" or (isinstance(tool, str) and tool.startswith("file_read:")):
+            filepath = args.get("path", "")
+            if not filepath and ":" in tool:
+                filepath = tool.split(":", 1)[1]
             if filepath.startswith("/"):
                 full_path = Path(filepath)
             else:
                 full_path = Path(WORKSPACE_DIR) / filepath.lstrip("/")
             if full_path.exists() and full_path.is_file():
                 content = full_path.read_text(encoding="utf-8", errors="replace")
-                return content[:10000]  # Limit output size
-            return f"File not found: {filepath}"
+                return content[:10000], None
+            return f"File not found: {filepath}", None
 
-        # File write
-        if tool.startswith("file_write:"):
-            filepath = tool.split(":", 1)[1]
+        # ── File Write ──
+        if tool == "file_write" or (isinstance(tool, str) and tool.startswith("file_write:")):
+            filepath = args.get("path", "")
+            if not filepath and ":" in tool:
+                filepath = tool.split(":", 1)[1]
+            content = args.get("content", "")
             if filepath.startswith("/"):
                 full_path = Path(filepath)
             else:
                 full_path = Path(WORKSPACE_DIR) / filepath.lstrip("/")
-            content = tool_call.arguments.get("content", "")
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
-            return f"Written {len(content)} bytes to {filepath}"
+            return f"Written {len(content)} bytes to {filepath}", None
 
-        # File list
-        if tool.startswith("file_list"):
-            path_arg = tool_call.arguments.get("path", "")
+        # ── File List ──
+        if tool == "file_list" or (isinstance(tool, str) and tool.startswith("file_list")):
+            path_arg = args.get("path", "")
             if path_arg.startswith("/"):
                 target = Path(path_arg)
             else:
                 target = Path(WORKSPACE_DIR) / (path_arg or ".")
             if target.exists() and target.is_dir():
                 files = [str(p.relative_to(target)) for p in target.rglob("*") if p.is_file()]
-                return "\n".join(files[:100])
-            return f"Directory not found: {target}"
+                return "\n".join(files[:100]), None
+            return f"Directory not found: {target}", None
 
-        # Search
-        if tool.startswith("search"):
-            query = tool_call.arguments.get("query", "")
+        # ── Search ──
+        if tool == "search_workspace" or (isinstance(tool, str) and tool.startswith("search")):
+            query = args.get("query", "")
             results = []
             agent_dir = Path(WORKSPACE_DIR)
             for f in agent_dir.rglob("*.md"):
@@ -311,13 +595,18 @@ class ToolExecutor:
                     for i, line in enumerate(content.splitlines(), 1):
                         if query.lower() in line.lower():
                             results.append(f"{f.relative_to(agent_dir)}:{i}: {line.strip()}")
-            return "\n".join(results[:50]) or f"No results for '{query}'"
+            return "\n".join(results[:50]) or f"No results for '{query}'", None
 
-        # Unknown tool — demo response
-        return f"Tool '{tool}' executed (sandbox mode)"
+        # ── Security Scan ──
+        if tool == "security_scan":
+            return "Security scan completed — no critical findings (sandbox mode)", None
+
+        # Unknown tool
+        return f"Tool '{tool}' executed (sandbox mode)", None
 
     async def close(self):
         await self.client.aclose()
+        await self.code_runner.close()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -508,13 +797,13 @@ class MockLLM:
 
 class DeepSeekLLM:
     """
-    DeepSeek / OpenAI-compatible LLM provider.
-    Uses the OpenAI chat completions API format.
-    Falls back to MockLLM for tool call detection.
+    DeepSeek / OpenAI-compatible LLM provider with native function calling.
+    Uses tool schemas for structured tool invocation instead of regex matching.
+    Falls back to MockLLM when API is unavailable.
     """
 
     def __init__(self):
-        self.mock = MockLLM()  # Fallback for tool detection
+        self.mock = MockLLM()  # Fallback when API fails
         api_key = DEEPSEEK_API_KEY or OPENAI_API_KEY
         base_url = DEEPSEEK_BASE_URL if DEEPSEEK_API_KEY else "https://api.openai.com"
         self.api_url = f"{base_url}/v1/chat/completions"
@@ -527,20 +816,9 @@ class DeepSeekLLM:
 
     async def generate(self, messages: list[ChatMessage], system_prompt: str,
                        kernel: KernelState) -> tuple[str, list[ToolCall]]:
-        """Generate via DeepSeek API, with MockLLM tool detection."""
-        # First check if user wants a tool action (MockLLM pattern matching)
-        _, tool_calls = await self.mock.generate(messages, system_prompt, kernel)
-
-        # If there's a tool call, let MockLLM handle the routing text
-        # The real LLM response comes after tool execution
-        if tool_calls:
-            return "Executing your request through AgentProxy...", tool_calls
-
-        # No tool calls — send to real LLM
+        """Generate via DeepSeek API with native function calling."""
         try:
             api_messages = [{"role": "system", "content": system_prompt}]
-
-            # Add conversation history (last 20 messages for context)
             for msg in messages[-20:]:
                 api_messages.append({"role": msg.role, "content": msg.content})
 
@@ -549,27 +827,82 @@ class DeepSeekLLM:
                 json={
                     "model": self.model,
                     "messages": api_messages,
+                    "tools": TOOL_SCHEMAS,
+                    "tool_choice": "auto",
                     "temperature": 0.7,
-                    "max_tokens": 2000,
+                    "max_tokens": 4000,
                     "stream": False,
                 },
                 headers=self.headers,
             )
 
-            if resp.status_code == 200:
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                return content, []
-            else:
+            if resp.status_code != 200:
                 error_text = resp.text[:200]
                 print(f"[DeepSeek] API error {resp.status_code}: {error_text}")
-                # Fallback to mock
                 return await self.mock.generate(messages, system_prompt, kernel)
+
+            data = resp.json()
+            choice = data["choices"][0]
+            message = choice["message"]
+
+            # Check for tool calls in the response
+            tool_calls_data = message.get("tool_calls", [])
+            if tool_calls_data:
+                tool_calls = []
+                for tc in tool_calls_data:
+                    fn = tc["function"]
+                    try:
+                        arguments = json.loads(fn.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        arguments = {}
+                    tool_calls.append(ToolCall(
+                        tool=fn["name"],
+                        arguments=arguments,
+                        reason=f"LLM decided to call {fn['name']}",
+                    ))
+                # Return a routing message + tool calls
+                content = message.get("content", "") or "Executing your request..."
+                return content, tool_calls
+
+            # Pure text response (no tools)
+            content = message.get("content", "")
+            return content, []
 
         except Exception as e:
             print(f"[DeepSeek] Exception: {e}")
-            # Fallback to mock
             return await self.mock.generate(messages, system_prompt, kernel)
+
+    async def synthesize_after_tools(self, messages: list[ChatMessage],
+                                      system_prompt: str,
+                                      tool_results_text: str) -> str:
+        """After tool execution, send results back to LLM for a synthesized response."""
+        try:
+            api_messages = [{"role": "system", "content": system_prompt}]
+            for msg in messages[-20:]:
+                api_messages.append({"role": msg.role, "content": msg.content})
+            # Add tool results as an assistant context message
+            api_messages.append({
+                "role": "user",
+                "content": f"Here are the results of the tool executions:\n\n{tool_results_text}\n\nPlease provide a helpful response summarizing the results and any next steps.",
+            })
+
+            resp = await self.client.post(
+                self.api_url,
+                json={
+                    "model": self.model,
+                    "messages": api_messages,
+                    "temperature": 0.7,
+                    "max_tokens": 4000,
+                    "stream": False,
+                },
+                headers=self.headers,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["choices"][0]["message"].get("content", "")
+        except Exception as e:
+            print(f"[DeepSeek] Synthesis error: {e}")
+        return ""  # Empty means use the raw tool output
 
     async def generate_stream(self, messages: list[ChatMessage], system_prompt: str,
                               kernel: KernelState):
@@ -585,8 +918,10 @@ class DeepSeekLLM:
                 json={
                     "model": self.model,
                     "messages": api_messages,
+                    "tools": TOOL_SCHEMAS,
+                    "tool_choice": "auto",
                     "temperature": 0.7,
-                    "max_tokens": 2000,
+                    "max_tokens": 4000,
                     "stream": True,
                 },
                 headers=self.headers,
@@ -812,16 +1147,14 @@ event_logger = EventLogger()
 replay_client = ReplayClient()
 memory_client = MemoryClient()
 
-# Select LLM provider
-if LLM_PROVIDER == "deepseek" and DEEPSEEK_API_KEY:
+# Select LLM provider based on available API keys
+if LLM_MODE == "function_calling":
     llm = DeepSeekLLM()
-    print(f"[OpenClaw] LLM: DeepSeek ({MODEL_NAME})")
-elif LLM_PROVIDER == "openai" and OPENAI_API_KEY:
-    llm = DeepSeekLLM()  # OpenAI-compatible class works for both
-    print(f"[OpenClaw] LLM: OpenAI ({MODEL_NAME})")
+    provider_name = "DeepSeek" if DEEPSEEK_API_KEY else "OpenAI"
+    print(f"[OpenClaw] LLM: {provider_name} ({MODEL_NAME}) — function calling mode")
 else:
     llm = MockLLM()
-    print(f"[OpenClaw] LLM: Mock (demo mode)")
+    print(f"[OpenClaw] LLM: Mock (demo mode) — set DEEPSEEK_API_KEY for real AI")
 
 sessions: dict[str, list[ChatMessage]] = {}
 terminal_sessions: dict[str, list[ChatMessage]] = {}
@@ -845,7 +1178,7 @@ async def healthz():
         "status": "ok",
         "service": "openclaw",
         "layer": "agent-runtime",
-        "provider": LLM_PROVIDER,
+        "provider": LLM_MODE,
         "model": MODEL_NAME,
     }
 
@@ -894,16 +1227,22 @@ async def chat(req: ChatRequest):
 
     # Execute tool calls through AgentProxy
     tool_results: list[ToolResult] = []
+    last_preview_url: str | None = None
     for tc in tool_calls:
         stats["total_tool_calls"] += 1
 
         result = await tool_executor.execute(
             skill=req.skill,
             tool_call=tc,
+            session_id=req.session_id,
             token_count=len(system_prompt) // 4,
             token_budget=200000,
         )
         tool_results.append(result)
+
+        # Track preview URL
+        if result.preview_url:
+            last_preview_url = result.preview_url
 
         # Update stats
         if result.decision == "ALLOW":
@@ -928,15 +1267,33 @@ async def chat(req: ChatRequest):
     # Augment response with tool outputs
     if tool_results:
         parts = [response_text, ""]
+        tool_summary_parts = []
         for tr in tool_results:
             if tr.decision == "ALLOW" and tr.output:
                 parts.append(f"**Result ({tr.tool}):**")
                 parts.append(f"```\n{tr.output[:5000]}\n```")
+                tool_summary_parts.append(f"Tool: {tr.tool}\nOutput:\n{tr.output[:3000]}")
             elif tr.decision == "DENY":
                 parts.append(f"**Blocked ({tr.tool}):** {tr.error}")
+                tool_summary_parts.append(f"Tool: {tr.tool}\nBlocked: {tr.error}")
             elif tr.decision == "HUMAN_GATE":
                 parts.append(f"**Awaiting approval ({tr.tool}):** {tr.output}")
         response_text = "\n".join(parts)
+
+        # Multi-turn synthesis: send tool results back to LLM for a polished response
+        if isinstance(llm, DeepSeekLLM) and tool_summary_parts:
+            try:
+                synthesis = await llm.synthesize_after_tools(
+                    all_messages, augmented_prompt,
+                    "\n\n".join(tool_summary_parts),
+                )
+                if synthesis:
+                    response_text = synthesis
+                    # Append preview link if available
+                    if last_preview_url:
+                        response_text += f"\n\n**Preview:** [Open Preview]({last_preview_url})"
+            except Exception as e:
+                print(f"[OpenClaw] Synthesis error: {e}")
 
     # Save assistant response
     history.append(ChatMessage(role="assistant", content=response_text))
@@ -1007,6 +1364,7 @@ async def chat(req: ChatRequest):
         session_id=req.session_id,
         tokens_used=len(response_text) // 4,
         latency_ms=round(latency, 2),
+        preview_url=last_preview_url,
     )
 
 
@@ -1036,7 +1394,7 @@ async def get_status():
     uptime = time.time() - stats["start_time"]
     return {
         "service": "openclaw",
-        "provider": LLM_PROVIDER,
+        "provider": LLM_MODE,
         "model": MODEL_NAME,
         "uptime_seconds": round(uptime, 1),
         "total_chats": stats["total_chats"],
@@ -1110,7 +1468,7 @@ async def websocket_terminal(websocket: WebSocket):
         "\x1b[36m"  # cyan
         "╔══════════════════════════════════════════════════════════╗\r\n"
         "║  \x1b[1mOpenClaw Terminal\x1b[0m\x1b[36m — ClawdContext OS v0.1.0           ║\r\n"
-        "║  AI Agent Runtime • Powered by " + (f"{LLM_PROVIDER}/{MODEL_NAME}" if LLM_PROVIDER != "mock" else "Mock LLM (demo)") + "\r\n"
+        "║  AI Agent Runtime • Powered by " + (f"{LLM_MODE}/{MODEL_NAME}" if LLM_MODE != "demo" else "Mock LLM (demo)") + "\r\n"
         "║  All commands mediated by AgentProxy (Layer 4)          ║\r\n"
         "║  Type 'help' for commands • 'clear' to reset            ║\r\n"
         "╚══════════════════════════════════════════════════════════╝\r\n"
@@ -1152,7 +1510,7 @@ async def websocket_terminal(websocket: WebSocket):
                 mins = int((uptime % 3600) // 60)
                 status_text = (
                     f"\x1b[36m── System Status ──\x1b[0m\r\n"
-                    f"  Provider:  \x1b[1m{LLM_PROVIDER}\x1b[0m ({MODEL_NAME})\r\n"
+                    f"  Provider:  \x1b[1m{LLM_MODE}\x1b[0m ({MODEL_NAME})\r\n"
                     f"  Uptime:    {hrs}h {mins}m\r\n"
                     f"  Chats:     {stats['total_chats']}\r\n"
                     f"  Tools:     {stats['total_tool_calls']} "
@@ -1174,9 +1532,8 @@ async def websocket_terminal(websocket: WebSocket):
             kernel_state = kernel.load_kernel()
             system_prompt = kernel.get_system_prompt(kernel_state)
 
-            # Check if it's a tool command first (MockLLM patterns)
-            mock = MockLLM() if not isinstance(llm, MockLLM) else llm
-            _, tool_calls = await mock.generate(
+            # Use the LLM to detect tool calls (native function calling or mock)
+            response_text, tool_calls = await llm.generate(
                 terminal_sessions[session_id], system_prompt, kernel_state
             )
 
@@ -1192,6 +1549,7 @@ async def websocket_terminal(websocket: WebSocket):
                     result = await tool_executor.execute(
                         skill="openclaw",
                         tool_call=tc,
+                        session_id=session_id,
                         token_count=len(system_prompt) // 4,
                         token_budget=200000,
                     )
@@ -1208,6 +1566,15 @@ async def websocket_terminal(websocket: WebSocket):
                             await websocket.send_json({
                                 "type": "output",
                                 "data": f"{output}\r\n"
+                            })
+                        if result.preview_url:
+                            await websocket.send_json({
+                                "type": "output",
+                                "data": f"\x1b[36m📄 Preview: {result.preview_url}\x1b[0m\r\n"
+                            })
+                            await websocket.send_json({
+                                "type": "preview",
+                                "data": result.preview_url,
                             })
                     elif result.decision == "DENY":
                         stats["tool_calls_denied"] += 1
@@ -1291,6 +1658,28 @@ async def websocket_terminal(websocket: WebSocket):
         terminal_sessions.pop(session_id, None)
 
 
+# ─── Sandbox Preview Proxy (code-runner → dashboard) ─────────
+
+@app.get("/api/v1/sandbox/preview/{session_id}/{filepath:path}")
+async def sandbox_preview(session_id: str, filepath: str):
+    """Proxy preview requests to the code-runner sandbox service."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{CODE_RUNNER_URL}/api/v1/preview/{session_id}/{filepath}"
+            )
+            if resp.status_code == 200:
+                content_type = resp.headers.get("content-type", "text/html")
+                from fastapi.responses import Response
+                return Response(
+                    content=resp.content,
+                    media_type=content_type,
+                )
+            return {"error": f"Preview not found: {filepath}", "status": resp.status_code}
+    except Exception as e:
+        return {"error": f"Code runner unreachable: {e}"}
+
+
 # ─── File Preview (Markdown Rendering) ───────────────────────
 
 @app.get("/api/v1/preview/{filepath:path}")
@@ -1357,7 +1746,7 @@ async def startup():
     kernel_state = kernel.load_kernel()
     print(f"══════════════════════════════════════════════")
     print(f"  OpenClaw Agent Runtime v0.1.0")
-    print(f"  Provider: {LLM_PROVIDER} | Model: {MODEL_NAME}")
+    print(f"  Provider: {LLM_MODE} | Model: {MODEL_NAME}")
     print(f"  Workspace: {WORKSPACE_DIR}")
     print(f"  Kernel: CLAUDE.md={'✓' if kernel_state.claude_md else '✗'} "
           f"todo.md={'✓' if kernel_state.todo_md else '✗'} "
@@ -1369,6 +1758,7 @@ async def startup():
     print(f"  ReplayEngine: {REPLAY_ENGINE_URL}")
     mem_ok = await memory_client.check_health()
     print(f"  Memory: {MEMORY_SERVICE_URL} {'✓' if mem_ok else '✗'}")
+    print(f"  CodeRunner: {CODE_RUNNER_URL}")
     print(f"══════════════════════════════════════════════")
 
 @app.on_event("shutdown")

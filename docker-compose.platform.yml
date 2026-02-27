@@ -98,7 +98,33 @@ services:
       com.clawdcontext.layer: "5"
       com.clawdcontext.component: "flight-recorder"
 
-  # ═══ OpenClaw Agent Runtime ═══
+  # ═══ Code Runner (Sandboxed Execution) ═══
+  code-runner:
+    build: ./platform/code-runner
+    container_name: ccos-code-runner
+    ports:
+      - "8406:8406"
+    environment:
+      - MAX_TIMEOUT=30
+      - MAX_OUTPUT=102400
+      - SANDBOX_DIR=/sandbox
+      - PERSIST_DIR=/persist
+    volumes:
+      - code-runner-persist:/persist
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8406/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    labels:
+      com.clawdcontext.layer: "sandbox"
+      com.clawdcontext.component: "code-runner"
+
+  # ═══ OpenClaw Agent Runtime (DeepSeek Function Calling) ═══
   openclaw:
     build: ./platform/openclaw
     container_name: ccos-openclaw
@@ -109,8 +135,8 @@ services:
       - FLIGHT_RECORDER_URL=http://flight-recorder:8402
       - REPLAY_ENGINE_URL=http://replay-engine:8404
       - MEMORY_SERVICE_URL=http://memory-service:8405
+      - CODE_RUNNER_URL=http://code-runner:8406
       - WORKSPACE_DIR=/workspace/agent
-      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -126,6 +152,8 @@ services:
       replay-engine:
         condition: service_healthy
       memory-service:
+        condition: service_healthy
+      code-runner:
         condition: service_healthy
     networks:
       - platform-net
@@ -233,6 +261,8 @@ services:
         condition: service_healthy
       replay-engine:
         condition: service_healthy
+      code-runner:
+        condition: service_healthy
     networks:
       - platform-net
     restart: unless-stopped
@@ -250,6 +280,7 @@ volumes:
   replay-data:
   proxy-audit:
   qdrant-data:
+  code-runner-persist:
 
 networks:
   platform-net:
