@@ -42,12 +42,13 @@ type ScanFinding struct {
 
 // ProxyDecision is the full evaluation result sent back to the caller.
 type ProxyDecision struct {
-	Decision  Decision       `json:"decision"`
-	Reason    string         `json:"reason"`
-	Checks    map[string]any `json:"checks"`
-	Gates     []GateResult   `json:"gates"`
-	LatencyUs int64          `json:"latency_us"`
-	AuditHash string         `json:"audit_hash,omitempty"`
+	Decision   Decision       `json:"decision"`
+	Reason     string         `json:"reason"`
+	Checks     map[string]any `json:"checks"`
+	Gates      []GateResult   `json:"gates"`
+	LatencyUs  int64          `json:"latency_us"`
+	AuditHash  string         `json:"audit_hash,omitempty"`
+	ApprovalID string         `json:"approval_id,omitempty"`
 }
 
 // ─── Audit ───────────────────────────────────────────────────────

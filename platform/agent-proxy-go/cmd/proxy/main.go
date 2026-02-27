@@ -18,6 +18,7 @@ import (
 	"github.com/ClawdContextOS/agent-proxy/internal/config"
 	"github.com/ClawdContextOS/agent-proxy/internal/gates"
 	"github.com/ClawdContextOS/agent-proxy/internal/models"
+	"github.com/ClawdContextOS/agent-proxy/internal/notify"
 	"github.com/ClawdContextOS/agent-proxy/internal/ws"
 )
 
@@ -51,12 +52,24 @@ type metricsCollector struct {
 	secStart time.Time
 	secCount int64
 	secDeny  int64
+
+	// Per-skill token burn tracking
+	skillTokens map[string]*skillBurn
+}
+
+type skillBurn struct {
+	TotalTokens int64     `json:"total_tokens"`
+	Calls       int64     `json:"calls"`
+	History     [60]int64 `json:"-"` // last 60 seconds
+	HistIdx     int       `json:"-"`
+	LastSeen    time.Time `json:"last_seen"`
 }
 
 func newMetrics() *metricsCollector {
 	return &metricsCollector{
 		latencies:     make([]int64, 1000),
 		gateLatencies: make(map[string]*gateStats),
+		skillTokens:   make(map[string]*skillBurn),
 		secStart:      time.Now(),
 	}
 }
@@ -90,6 +103,52 @@ func (m *metricsCollector) record(totalUs int64, gateResults []models.GateResult
 	}
 
 	m.secCount++
+}
+
+// recordSkillTokens tracks per-skill token consumption.
+func (m *metricsCollector) recordSkillTokens(skill string, tokens int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sb, ok := m.skillTokens[skill]
+	if !ok {
+		sb = &skillBurn{}
+		m.skillTokens[skill] = sb
+	}
+	sb.TotalTokens += int64(tokens)
+	sb.Calls++
+	sb.History[sb.HistIdx] += int64(tokens)
+	sb.LastSeen = time.Now()
+}
+
+// tickSkillTokens advances the per-skill history ring.
+func (m *metricsCollector) tickSkillTokens() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, sb := range m.skillTokens {
+		sb.HistIdx = (sb.HistIdx + 1) % 60
+		sb.History[sb.HistIdx] = 0
+	}
+}
+
+// skillBurnSnapshot returns per-skill token stats.
+func (m *metricsCollector) skillBurnSnapshot() map[string]any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make(map[string]any, len(m.skillTokens))
+	for name, sb := range m.skillTokens {
+		hist := make([]int64, 60)
+		for i := 0; i < 60; i++ {
+			idx := (sb.HistIdx + 1 + i) % 60
+			hist[i] = sb.History[idx]
+		}
+		result[name] = map[string]any{
+			"total_tokens": sb.TotalTokens,
+			"calls":        sb.Calls,
+			"history":      hist,
+			"last_seen":    sb.LastSeen.Format(time.RFC3339),
+		}
+	}
+	return result
 }
 
 func (m *metricsCollector) recordDeny() {
@@ -216,11 +275,13 @@ func (m *metricsCollector) snapshot() map[string]any {
 // ---------------------------------------------------------------------------
 
 type server struct {
-	cfg      *config.Config
-	pipeline *gates.Pipeline
-	auditLog *audit.Logger
-	hub      *ws.Hub
-	metrics  *metricsCollector
+	cfg       *config.Config
+	pipeline  *gates.Pipeline
+	auditLog  *audit.Logger
+	hub       *ws.Hub
+	metrics   *metricsCollector
+	notifyHub *notify.Hub
+	approvals *notify.ApprovalManager
 
 	startTime time.Time
 
@@ -243,14 +304,27 @@ func newServer(cfg *config.Config) (*server, error) {
 	cer := gates.NewCERGate(cfg.CERWarn, cfg.CERCrit)
 	pipeline := gates.NewPipeline(rl, hg, cap, sc, cer)
 
-	hub := ws.NewHub()
+	wsHub := ws.NewHub()
+
+	// Build notification channels
+	channels := []notify.Channel{
+		notify.NewNtfy(cfg.NtfyURL, cfg.NtfyTopic, cfg.NtfyToken),
+		notify.NewDiscord(cfg.DiscordWebhook),
+		notify.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID),
+		notify.NewSlack(cfg.SlackWebhook),
+		notify.NewMatrix(cfg.MatrixHomeserver, cfg.MatrixRoomID, cfg.MatrixAccessToken),
+	}
+	notifyHub := notify.NewHub(channels)
+	approvals := notify.NewApprovalManager(time.Duration(cfg.HITLTimeoutSec) * time.Second)
 
 	return &server{
 		cfg:       cfg,
 		pipeline:  pipeline,
 		auditLog:  auditLog,
-		hub:       hub,
+		hub:       wsHub,
 		metrics:   newMetrics(),
+		notifyHub: notifyHub,
+		approvals: approvals,
 		startTime: time.Now(),
 	}, nil
 }
@@ -314,6 +388,11 @@ func (s *server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		s.humanGated.Add(1)
 	}
 
+	// Per-skill token burn
+	if req.TokenCount > 0 {
+		s.metrics.recordSkillTokens(req.Skill, req.TokenCount)
+	}
+
 	checks := make(map[string]any)
 	for _, g := range result.Gates {
 		checks[g.Name] = map[string]any{
@@ -334,6 +413,34 @@ func (s *server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		LatencyUs: result.TotalUs,
 		AuditHash: hash,
 	}
+
+	// --- Notification dispatch ---
+	severity := notify.SeverityInfo
+	if result.Decision == models.Deny {
+		severity = notify.SeverityCritical
+	} else if result.Decision == models.HumanGate {
+		severity = notify.SeverityWarning
+	}
+
+	evt := notify.Event{
+		Severity:  severity,
+		Decision:  string(result.Decision),
+		Skill:     req.Skill,
+		Tool:      req.Tool,
+		Reason:    result.Reason,
+		Risk:      float64(result.TotalUs) / 1000.0,
+		Timestamp: time.Now(),
+	}
+
+	if result.Decision == models.HumanGate {
+		approval := s.approvals.Create(evt)
+		evt.NeedsApproval = true
+		evt.ApprovalID = approval.ID
+		decision.ApprovalID = approval.ID
+	}
+
+	s.notifyHub.Notify(evt)
+	// --- End notification dispatch ---
 
 	s.hub.Broadcast(models.WSEvent{
 		Type:      "evaluation",
@@ -415,11 +522,119 @@ func (s *server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	snap["p99_latency_us"] = s.metrics.p99Latency()
 	snap["ws_clients"] = s.hub.ClientCount()
 	snap["uptime_seconds"] = time.Since(s.startTime).Seconds()
+	snap["skill_token_burn"] = s.metrics.skillBurnSnapshot()
+	snap["notifications"] = map[string]any{
+		"channels": s.notifyHub.Status(),
+		"enabled":  s.notifyHub.EnabledChannels(),
+	}
 	writeJSON(w, http.StatusOK, snap)
 }
 
 func (s *server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.hub.HandleWebSocket(w, r)
+}
+
+// ---------------------------------------------------------------------------
+// Notification & HITL Handlers
+// ---------------------------------------------------------------------------
+
+func (s *server) handleNotifyStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"channels": s.notifyHub.Status(),
+		"enabled":  s.notifyHub.EnabledChannels(),
+	})
+}
+
+func (s *server) handleNotifyHistory(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		fmt.Sscanf(q, "%d", &limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"history": s.notifyHub.History(limit),
+	})
+}
+
+func (s *server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Channel string `json:"channel"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+
+	evt := notify.Event{
+		Severity:  notify.SeverityInfo,
+		Decision:  "TEST",
+		Skill:     "test-skill",
+		Tool:      "test-tool",
+		Reason:    "Test notification from ClawdContext OS dashboard",
+		Timestamp: time.Now(),
+	}
+
+	s.notifyHub.Notify(evt)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+func (s *server) handleHITLPending(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pending": s.approvals.Pending(),
+		"stats":   s.approvals.Stats(),
+	})
+}
+
+func (s *server) handleHITLHistory(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		fmt.Sscanf(q, "%d", &limit)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"history": s.approvals.History(limit),
+		"stats":   s.approvals.Stats(),
+	})
+}
+
+func (s *server) handleHITLApprove(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		source = "dashboard"
+	}
+	if _, ok := s.approvals.Approve(id, source); ok {
+		s.hub.Broadcast(models.WSEvent{
+			Type:      "hitl_resolved",
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Decision:  "APPROVED",
+			Reason:    "Approved by " + source,
+		})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "id": id})
+	} else {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval not found or expired"})
+	}
+}
+
+func (s *server) handleHITLDeny(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		source = "dashboard"
+	}
+	if _, ok := s.approvals.Deny(id, source); ok {
+		s.hub.Broadcast(models.WSEvent{
+			Type:      "hitl_resolved",
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Decision:  "DENIED",
+			Reason:    "Denied by " + source,
+		})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "denied", "id": id})
+	} else {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval not found or expired"})
+	}
+}
+
+func (s *server) handleSkillTokenBurn(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"skill_token_burn": s.metrics.skillBurnSnapshot(),
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +672,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			srv.metrics.tick(srv.pipeline.CER())
+			srv.metrics.tickSkillTokens()
 		}
 	}()
 
@@ -474,6 +690,20 @@ func main() {
 	api.HandleFunc("/skills/reload", srv.handleReloadSkills).Methods("POST")
 	api.HandleFunc("/patterns", srv.handlePatterns).Methods("GET")
 	api.HandleFunc("/metrics", srv.handleMetrics).Methods("GET")
+
+	// Notification endpoints
+	api.HandleFunc("/notifications/status", srv.handleNotifyStatus).Methods("GET")
+	api.HandleFunc("/notifications/history", srv.handleNotifyHistory).Methods("GET")
+	api.HandleFunc("/notifications/test", srv.handleNotifyTest).Methods("POST")
+
+	// HITL endpoints
+	api.HandleFunc("/hitl/pending", srv.handleHITLPending).Methods("GET")
+	api.HandleFunc("/hitl/history", srv.handleHITLHistory).Methods("GET")
+	api.HandleFunc("/hitl/approve/{id}", srv.handleHITLApprove).Methods("POST")
+	api.HandleFunc("/hitl/deny/{id}", srv.handleHITLDeny).Methods("POST")
+
+	// Per-skill token burn
+	api.HandleFunc("/skills/token-burn", srv.handleSkillTokenBurn).Methods("GET")
 
 	r.HandleFunc("/ws/events", srv.handleWebSocket)
 
@@ -494,6 +724,13 @@ func main() {
 	log.Printf("[agent-proxy] Audit file: %s", cfg.AuditFile)
 	log.Printf("[agent-proxy] Rate limit: %d rpm", cfg.MaxRateRPM)
 	log.Printf("[agent-proxy] CER thresholds: warn=%.1f crit=%.1f", cfg.CERWarn, cfg.CERCrit)
+	enabled := srv.notifyHub.EnabledChannels()
+	if len(enabled) > 0 {
+		log.Printf("[agent-proxy] Notifications: %v", enabled)
+	} else {
+		log.Printf("[agent-proxy] Notifications: none configured")
+	}
+	log.Printf("[agent-proxy] HITL timeout: %ds", cfg.HITLTimeoutSec)
 	log.Printf("[agent-proxy] Listening on %s", addr)
 
 	if err := http.ListenAndServe(addr, handler); err != nil {

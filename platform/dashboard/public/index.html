@@ -61,6 +61,8 @@
       <button class="tab" data-tab="audit" onclick="switchTab('audit')">▤ AUDIT LOG</button>
       <button class="tab" data-tab="skills" onclick="switchTab('skills')">⚙ SKILLS</button>
       <button class="tab" data-tab="replay" onclick="switchTab('replay')">▶ REPLAY</button>
+      <button class="tab" data-tab="notifications" onclick="switchTab('notifications')">🔔 NOTIFICATIONS</button>
+      <button class="tab" data-tab="memory" onclick="switchTab('memory')">🧠 MEMORY</button>
     </nav>
 
     <!-- Content Panels -->
@@ -537,6 +539,139 @@
           <div class="panel-header">CER TREND OVER SESSION</div>
           <div id="cer-trend" class="cer-trend">
             <canvas id="cer-trend-canvas" width="900" height="120"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- NOTIFICATIONS TAB -->
+      <section id="tab-notifications" class="tab-content">
+        <div class="grid-3">
+          <!-- Channel Status -->
+          <div class="panel">
+            <div class="panel-header">NOTIFICATION CHANNELS</div>
+            <div id="notify-channels" class="notify-channels"></div>
+            <div style="padding:0.75rem;border-top:1px solid var(--border)">
+              <button class="btn-action" onclick="sendTestNotification()">📡 SEND TEST</button>
+            </div>
+          </div>
+
+          <!-- HITL Stats -->
+          <div class="panel">
+            <div class="panel-header">HITL — HUMAN APPROVALS</div>
+            <div class="stat-grid">
+              <div class="stat">
+                <div class="stat-value stat-gate" id="hitl-pending">0</div>
+                <div class="stat-label">PENDING</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value stat-allow" id="hitl-approved">0</div>
+                <div class="stat-label">APPROVED</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value stat-deny" id="hitl-denied">0</div>
+                <div class="stat-label">DENIED</div>
+              </div>
+              <div class="stat">
+                <div class="stat-value" id="hitl-expired">0</div>
+                <div class="stat-label">EXPIRED</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Per-Skill Token Burn -->
+          <div class="panel">
+            <div class="panel-header">PER-SKILL TOKEN BURN</div>
+            <div id="skill-burn" class="skill-burn-list"></div>
+          </div>
+        </div>
+
+        <!-- Pending Approvals Queue -->
+        <div class="panel full-width">
+          <div class="panel-header">
+            PENDING APPROVALS
+            <span id="hitl-queue-count" class="count-badge">0</span>
+          </div>
+          <div id="hitl-queue" class="hitl-queue"></div>
+        </div>
+
+        <!-- Notification History -->
+        <div class="panel full-width">
+          <div class="panel-header">
+            NOTIFICATION HISTORY
+            <span id="notify-history-count" class="count-badge">0</span>
+          </div>
+          <div id="notify-history" class="event-stream" style="max-height:400px;overflow-y:auto"></div>
+        </div>
+      </section>
+
+      <!-- MEMORY TAB -->
+      <section id="tab-memory" class="tab-content">
+        <div class="grid-2col">
+          <!-- Memory Stats -->
+          <div class="panel">
+            <div class="panel-header">
+              MEMORY STATS
+              <button class="btn-test-notify" onclick="loadMemoryStats()">↻ Refresh</button>
+            </div>
+            <div id="memory-stats-grid" class="memory-stats-grid">
+              <div class="hitl-stat-card"><div class="stat-val" id="mem-total">0</div><div class="stat-label">Total Points</div></div>
+              <div class="hitl-stat-card"><div class="stat-val" id="mem-conversations">0</div><div class="stat-label">Conversations</div></div>
+              <div class="hitl-stat-card"><div class="stat-val" id="mem-tool-results">0</div><div class="stat-label">Tool Results</div></div>
+              <div class="hitl-stat-card"><div class="stat-val" id="mem-knowledge">0</div><div class="stat-label">Knowledge</div></div>
+            </div>
+            <div style="margin-top:12px">
+              <div class="hitl-stat-card" style="display:inline-block;margin-right:8px"><div class="stat-val" id="mem-lessons">0</div><div class="stat-label">Lessons</div></div>
+              <div class="hitl-stat-card" style="display:inline-block;margin-right:8px"><div class="stat-val" id="mem-model">-</div><div class="stat-label">Model</div></div>
+              <div class="hitl-stat-card" style="display:inline-block"><div class="stat-val" id="mem-dim">0</div><div class="stat-label">Dimensions</div></div>
+            </div>
+          </div>
+
+          <!-- Semantic Search -->
+          <div class="panel">
+            <div class="panel-header">SEMANTIC SEARCH</div>
+            <div style="display:flex;gap:8px;margin-bottom:12px">
+              <input type="text" id="memory-query" class="input-field" placeholder="Search memories..." style="flex:1" onkeydown="if(event.key==='Enter')searchMemory()">
+              <select id="memory-collection" class="input-field" style="width:140px">
+                <option value="">All collections</option>
+                <option value="conversations">Conversations</option>
+                <option value="tool_results">Tool Results</option>
+                <option value="lessons">Lessons</option>
+                <option value="knowledge">Knowledge</option>
+              </select>
+              <button class="btn-primary-sm" onclick="searchMemory()">Search</button>
+            </div>
+            <div id="memory-results" class="memory-results">
+              <div class="empty-state">Enter a query to search semantic memory</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2col" style="margin-top:12px">
+          <!-- Store Memory -->
+          <div class="panel">
+            <div class="panel-header">STORE MEMORY</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <select id="store-collection" class="input-field">
+                <option value="knowledge">Knowledge</option>
+                <option value="conversations">Conversations</option>
+                <option value="tool_results">Tool Results</option>
+                <option value="lessons">Lessons</option>
+              </select>
+              <textarea id="store-text" class="input-field" rows="4" placeholder="Text to store in semantic memory..."></textarea>
+              <div style="display:flex;gap:8px">
+                <button class="btn-primary-sm" onclick="storeMemory()">Store</button>
+                <span id="store-result" style="font-size:11px;color:var(--text-dim);align-self:center"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recent Memories -->
+          <div class="panel">
+            <div class="panel-header">
+              COLLECTIONS
+              <span id="mem-qdrant-status" class="ch-badge off">checking...</span>
+            </div>
+            <div id="memory-collections" class="notify-channels"></div>
           </div>
         </div>
       </section>

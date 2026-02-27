@@ -24,6 +24,19 @@ services:
       - CER_WARN=0.4
       - CER_CRIT=0.2
       - AUDIT_FILE=/data/audit/chain.jsonl
+      # Notification channels (all optional — leave empty to disable)
+      - CCOS_NTFY_URL=${CCOS_NTFY_URL:-}
+      - CCOS_NTFY_TOPIC=${CCOS_NTFY_TOPIC:-}
+      - CCOS_NTFY_TOKEN=${CCOS_NTFY_TOKEN:-}
+      - CCOS_DISCORD_WEBHOOK=${CCOS_DISCORD_WEBHOOK:-}
+      - CCOS_TELEGRAM_BOT_TOKEN=${CCOS_TELEGRAM_BOT_TOKEN:-}
+      - CCOS_TELEGRAM_CHAT_ID=${CCOS_TELEGRAM_CHAT_ID:-}
+      - CCOS_SLACK_WEBHOOK=${CCOS_SLACK_WEBHOOK:-}
+      - CCOS_MATRIX_HOMESERVER=${CCOS_MATRIX_HOMESERVER:-}
+      - CCOS_MATRIX_ROOM_ID=${CCOS_MATRIX_ROOM_ID:-}
+      - CCOS_MATRIX_ACCESS_TOKEN=${CCOS_MATRIX_ACCESS_TOKEN:-}
+      - CCOS_HITL_TIMEOUT=${CCOS_HITL_TIMEOUT:-300}
+      - CCOS_PROXY_PUBLIC_URL=${CCOS_PROXY_PUBLIC_URL:-http://localhost:8400}
     volumes:
       - ./agent/skills:/workspace/agent/skills:ro
       - proxy-audit:/data/audit
@@ -95,6 +108,7 @@ services:
       - AGENT_PROXY_URL=http://agent-proxy:8400
       - FLIGHT_RECORDER_URL=http://flight-recorder:8402
       - REPLAY_ENGINE_URL=http://replay-engine:8404
+      - MEMORY_SERVICE_URL=http://memory-service:8405
       - WORKSPACE_DIR=/workspace/agent
       - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
@@ -110,6 +124,8 @@ services:
       flight-recorder:
         condition: service_healthy
       replay-engine:
+        condition: service_healthy
+      memory-service:
         condition: service_healthy
     networks:
       - platform-net
@@ -151,6 +167,55 @@ services:
       com.clawdcontext.layer: "5-6"
       com.clawdcontext.component: "replay-engine"
 
+  # ═══ Qdrant Vector Database ═══
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    container_name: ccos-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/0.0.0.0/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    labels:
+      com.clawdcontext.layer: "memory"
+      com.clawdcontext.component: "qdrant"
+
+  # ═══ Memory Service (Semantic Memory Layer) ═══
+  memory-service:
+    build: ./platform/memory-service
+    container_name: ccos-memory-service
+    ports:
+      - "8405:8405"
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - FLIGHT_RECORDER_URL=http://flight-recorder:8402
+      - EMBEDDING_MODEL=all-MiniLM-L6-v2
+      - AUTO_INGEST=true
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    networks:
+      - platform-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8405/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+      com.clawdcontext.layer: "memory"
+      com.clawdcontext.component: "memory-service"
+
   # ═══ Dashboard (Mission Control) ═══
   dashboard:
     build: ./platform/dashboard
@@ -184,6 +249,7 @@ services:
 volumes:
   replay-data:
   proxy-audit:
+  qdrant-data:
 
 networks:
   platform-net:

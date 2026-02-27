@@ -1758,6 +1758,289 @@ function connectReplayWs() {
   } catch {}
 }
 
+// ─── Notifications Tab ────────────────────────────────────────────
+
+let notifyPolling = null;
+
+function startNotifyPolling() {
+  if (notifyPolling) return;
+  loadNotifyStatus();
+  loadHITLPending();
+  loadNotifyHistory();
+  loadSkillBurn();
+  notifyPolling = setInterval(() => {
+    loadNotifyStatus();
+    loadHITLPending();
+    loadNotifyHistory();
+    loadSkillBurn();
+  }, 3000);
+}
+
+function stopNotifyPolling() {
+  if (notifyPolling) { clearInterval(notifyPolling); notifyPolling = null; }
+}
+
+async function loadNotifyStatus() {
+  try {
+    const resp = await fetch(`${API.proxy}/api/v1/notifications/status`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const el = document.getElementById('notify-channels');
+    if (!el) return;
+    el.innerHTML = (data.channels || []).map(ch => {
+      const dot = ch.enabled ? '<span class="ch-dot ch-on"></span>' : '<span class="ch-dot ch-off"></span>';
+      const badge = ch.enabled ? '<span class="ch-badge on">ON</span>' : '<span class="ch-badge off">OFF</span>';
+      return `<div class="ch-row">
+        ${dot}<span class="ch-name">${ch.name.toUpperCase()}</span>${badge}
+        <span class="ch-stats">${ch.sent} sent / ${ch.errors} err</span>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+async function loadHITLPending() {
+  try {
+    const resp = await fetch(`${API.proxy}/api/v1/hitl/pending`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const stats = data.stats || {};
+    document.getElementById('hitl-pending').textContent = stats.pending || 0;
+    document.getElementById('hitl-approved').textContent = stats.approved || 0;
+    document.getElementById('hitl-denied').textContent = stats.denied || 0;
+    document.getElementById('hitl-expired').textContent = stats.expired || 0;
+    document.getElementById('hitl-queue-count').textContent = (data.pending || []).length;
+    const el = document.getElementById('hitl-queue');
+    if (!el) return;
+    if (!data.pending || data.pending.length === 0) {
+      el.innerHTML = '<div class="empty-state">No pending approvals</div>';
+      return;
+    }
+    el.innerHTML = data.pending.map(a => {
+      const age = Math.round((Date.now() - new Date(a.created_at).getTime()) / 1000);
+      const ttl = Math.max(0, Math.round((new Date(a.expires_at).getTime() - Date.now()) / 1000));
+      return `<div class="hitl-card">
+        <div class="hitl-top">
+          <span class="hitl-id">${a.id.slice(0,8)}...</span>
+          <span class="hitl-skill">${a.event.skill} → ${a.event.tool}</span>
+          <span class="hitl-ttl ${ttl < 60 ? 'urgent' : ''}">${ttl}s remaining</span>
+        </div>
+        <div class="hitl-reason">${a.event.reason}</div>
+        <div class="hitl-actions">
+          <button class="btn-approve" onclick="resolveApproval('${a.id}','approve')">✅ APPROVE</button>
+          <button class="btn-deny" onclick="resolveApproval('${a.id}','deny')">❌ DENY</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+async function resolveApproval(id, action) {
+  try {
+    await fetch(`${API.proxy}/api/v1/hitl/${action}/${id}?source=dashboard`, { method: 'POST' });
+    loadHITLPending();
+  } catch {}
+}
+
+async function loadNotifyHistory() {
+  try {
+    const resp = await fetch(`${API.proxy}/api/v1/notifications/history?limit=50`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const entries = data.history || [];
+    document.getElementById('notify-history-count').textContent = entries.length;
+    const el = document.getElementById('notify-history');
+    if (!el) return;
+    if (entries.length === 0) {
+      el.innerHTML = '<div class="empty-state">No notifications sent yet</div>';
+      return;
+    }
+    el.innerHTML = entries.reverse().map(h => {
+      const time = new Date(h.timestamp).toLocaleTimeString();
+      const icon = h.ok ? '✅' : '❌';
+      const cls = h.ok ? 'ev-allow' : 'ev-deny';
+      return `<div class="event-row ${cls}">
+        <span class="ev-time">${time}</span>
+        <span>${icon} ${h.channel.toUpperCase()}</span>
+        <span class="ev-decision">${h.decision}</span>
+        <span>${h.skill} → ${h.tool}</span>
+        ${h.error ? `<span class="ev-error">${h.error}</span>` : ''}
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+async function loadSkillBurn() {
+  try {
+    const resp = await fetch(`${API.proxy}/api/v1/skills/token-burn`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const burn = data.skill_token_burn || {};
+    const el = document.getElementById('skill-burn');
+    if (!el) return;
+    const skills = Object.entries(burn);
+    if (skills.length === 0) {
+      el.innerHTML = '<div class="empty-state">No skill usage yet</div>';
+      return;
+    }
+    el.innerHTML = skills.sort((a,b) => b[1].total_tokens - a[1].total_tokens).map(([name, s]) => {
+      const avg = s.calls > 0 ? Math.round(s.total_tokens / s.calls) : 0;
+      return `<div class="burn-row">
+        <span class="burn-name">${name}</span>
+        <span class="burn-tokens">${s.total_tokens.toLocaleString()} tok</span>
+        <span class="burn-calls">${s.calls} calls</span>
+        <span class="burn-avg">~${avg}/call</span>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+async function sendTestNotification() {
+  try {
+    await fetch(`${API.proxy}/api/v1/notifications/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: 'all' })
+    });
+    loadNotifyStatus();
+    loadNotifyHistory();
+  } catch {}
+}
+
+// Hook into switchTab to start/stop notification polling
+const _origSwitchTab = window.switchTab;
+window.switchTab = function(tab) {
+  if (typeof _origSwitchTab === 'function') _origSwitchTab(tab);
+  if (tab === 'notifications') {
+    startNotifyPolling();
+  } else {
+    stopNotifyPolling();
+  }
+  if (tab === 'memory') {
+    loadMemoryStats();
+    loadMemoryCollections();
+  }
+};
+
+// ─── Memory Tab ──────────────────────────────────────────────────
+
+const MEMORY_API = 'http://localhost:8405';
+
+async function loadMemoryStats() {
+  try {
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/stats`);
+    const data = await resp.json();
+    document.getElementById('mem-total').textContent = data.total_points;
+    document.getElementById('mem-conversations').textContent = data.collections.conversations || 0;
+    document.getElementById('mem-tool-results').textContent = data.collections.tool_results || 0;
+    document.getElementById('mem-knowledge').textContent = data.collections.knowledge || 0;
+    document.getElementById('mem-lessons').textContent = data.collections.lessons || 0;
+    document.getElementById('mem-model').textContent = data.embedding_model.split('/').pop();
+    document.getElementById('mem-dim').textContent = data.embedding_dim;
+    const badge = document.getElementById('mem-qdrant-status');
+    if (data.qdrant_connected) {
+      badge.className = 'ch-badge on';
+      badge.textContent = 'CONNECTED';
+    } else {
+      badge.className = 'ch-badge off';
+      badge.textContent = 'DISCONNECTED';
+    }
+  } catch (e) {
+    const badge = document.getElementById('mem-qdrant-status');
+    badge.className = 'ch-badge off';
+    badge.textContent = 'OFFLINE';
+  }
+}
+
+async function loadMemoryCollections() {
+  try {
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/collections`);
+    const data = await resp.json();
+    const el = document.getElementById('memory-collections');
+    el.innerHTML = data.collections.map(c => `
+      <div class="ch-row">
+        <span class="ch-dot ${c.points > 0 ? 'ch-on' : 'ch-off'}"></span>
+        <span class="ch-name">${c.name}</span>
+        <span class="ch-stats">${c.points} points</span>
+        <span class="ch-badge ${c.points > 0 ? 'on' : 'off'}">${c.description.substring(0, 30)}</span>
+      </div>
+    `).join('');
+  } catch {
+    document.getElementById('memory-collections').innerHTML = '<div class="empty-state">Memory service offline</div>';
+  }
+}
+
+async function searchMemory() {
+  const query = document.getElementById('memory-query').value.trim();
+  if (!query) return;
+
+  const collection = document.getElementById('memory-collection').value || null;
+  const el = document.getElementById('memory-results');
+  el.innerHTML = '<div class="empty-state">Searching...</div>';
+
+  try {
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, collection, limit: 10, score_threshold: 0.25 })
+    });
+    const data = await resp.json();
+
+    if (data.results.length === 0) {
+      el.innerHTML = `<div class="empty-state">No results for "${query}" (${data.latency_ms}ms)</div>`;
+      return;
+    }
+
+    el.innerHTML = data.results.map(r => `
+      <div class="memory-result-card">
+        <div class="mem-result-top">
+          <span class="mem-collection">${r.collection}</span>
+          <span class="mem-score">${(r.score * 100).toFixed(1)}%</span>
+        </div>
+        <div class="mem-text">${escapeHtml(r.text.substring(0, 300))}${r.text.length > 300 ? '...' : ''}</div>
+        <div class="mem-meta">
+          ${r.metadata.session_id ? '<span>session: ' + r.metadata.session_id + '</span>' : ''}
+          ${r.metadata.timestamp ? '<span>' + new Date(r.metadata.timestamp).toLocaleString() + '</span>' : ''}
+        </div>
+      </div>
+    `).join('') + `<div style="font-size:10px;color:var(--text-dim);margin-top:8px">${data.total} results in ${data.latency_ms}ms</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state">Search failed: ${e.message}</div>`;
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function storeMemory() {
+  const collection = document.getElementById('store-collection').value;
+  const text = document.getElementById('store-text').value.trim();
+  const resultEl = document.getElementById('store-result');
+  if (!text) { resultEl.textContent = 'Enter text to store'; return; }
+
+  try {
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/store`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ collection, text, session_id: 'dashboard', metadata: { source: 'dashboard' } })
+    });
+    const data = await resp.json();
+    if (data.duplicate) {
+      resultEl.textContent = '⚠ Duplicate — already stored';
+      resultEl.style.color = 'var(--amber)';
+    } else {
+      resultEl.textContent = `✓ Stored (${data.id.substring(0, 8)}...)`;
+      resultEl.style.color = 'var(--green)';
+      document.getElementById('store-text').value = '';
+      loadMemoryStats();
+      loadMemoryCollections();
+    }
+  } catch (e) {
+    resultEl.textContent = `✗ Failed: ${e.message}`;
+    resultEl.style.color = 'var(--red)';
+  }
+}
+
 // ─── Utilities ───────────────────────────────────────────────────
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

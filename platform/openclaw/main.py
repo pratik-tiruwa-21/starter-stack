@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field
 AGENT_PROXY_URL = os.getenv("AGENT_PROXY_URL", "http://agent-proxy:8400")
 FLIGHT_RECORDER_URL = os.getenv("FLIGHT_RECORDER_URL", "http://flight-recorder:8402")
 REPLAY_ENGINE_URL = os.getenv("REPLAY_ENGINE_URL", "http://replay-engine:8404")
+MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory-service:8405")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/workspace")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")  # mock | deepseek | openai | anthropic | ollama
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -639,6 +640,81 @@ class EventLogger:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Memory Client (Qdrant Semantic Memory via memory-service)
+# ═══════════════════════════════════════════════════════════════
+
+class MemoryClient:
+    """Queries memory-service for relevant context (RAG) and stores new memories."""
+
+    def __init__(self):
+        self.client = httpx.AsyncClient(timeout=10.0)
+        self.enabled = True
+
+    async def recall(self, query: str, session_id: str = "default",
+                     limit: int = 3) -> list[dict]:
+        """Retrieve relevant memories for a query (used before LLM call)."""
+        if not self.enabled:
+            return []
+        try:
+            resp = await self.client.get(
+                f"{MEMORY_SERVICE_URL}/api/v1/memory/recall",
+                params={"q": query, "session_id": session_id, "limit": limit},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("memories", [])
+        except Exception:
+            pass
+        return []
+
+    async def store_conversation(self, text: str, session_id: str,
+                                  metadata: dict = None):
+        """Store a conversation turn in memory."""
+        if not self.enabled:
+            return
+        try:
+            await self.client.post(
+                f"{MEMORY_SERVICE_URL}/api/v1/memory/store",
+                json={
+                    "collection": "conversations",
+                    "text": text,
+                    "session_id": session_id,
+                    "metadata": metadata or {},
+                },
+            )
+        except Exception:
+            pass
+
+    async def store_tool_result(self, text: str, session_id: str,
+                                 metadata: dict = None):
+        """Store a tool result in memory."""
+        if not self.enabled:
+            return
+        try:
+            await self.client.post(
+                f"{MEMORY_SERVICE_URL}/api/v1/memory/store",
+                json={
+                    "collection": "tool_results",
+                    "text": text,
+                    "session_id": session_id,
+                    "metadata": metadata or {},
+                },
+            )
+        except Exception:
+            pass
+
+    async def check_health(self) -> bool:
+        """Check if memory-service is available."""
+        try:
+            resp = await self.client.get(f"{MEMORY_SERVICE_URL}/healthz")
+            return resp.status_code == 200
+        except Exception:
+            return False
+
+    async def close(self):
+        await self.client.aclose()
+
+
+# ═══════════════════════════════════════════════════════════════
 # Replay Client (sends timeline events to ReplayEngine)
 # ═══════════════════════════════════════════════════════════════
 
@@ -734,6 +810,7 @@ kernel = MarkdownKernel(WORKSPACE_DIR)
 tool_executor = ToolExecutor()
 event_logger = EventLogger()
 replay_client = ReplayClient()
+memory_client = MemoryClient()
 
 # Select LLM provider
 if LLM_PROVIDER == "deepseek" and DEEPSEEK_API_KEY:
@@ -793,9 +870,27 @@ async def chat(req: ChatRequest):
     # Add user message
     history.append(ChatMessage(role="user", content=req.message))
 
+    # ─── Memory Recall (RAG) — retrieve relevant context before LLM call ───
+    memory_context = ""
+    try:
+        memories = await memory_client.recall(req.message, session_id=req.session_id, limit=3)
+        if memories:
+            memory_parts = ["[Relevant memories from previous interactions:]"]
+            for m in memories:
+                memory_parts.append(f"- ({m['collection']}, score={m['score']:.2f}) {m['text'][:500]}")
+            memory_context = "\n".join(memory_parts)
+    except Exception:
+        pass  # Don't block chat on memory failures
+
     # Generate response + tool calls
     all_messages = req.history if req.history else history
-    response_text, tool_calls = await llm.generate(all_messages, system_prompt, kernel_state)
+
+    # Inject memory context as a system-level hint if available
+    augmented_prompt = system_prompt
+    if memory_context:
+        augmented_prompt = system_prompt + "\n\n" + memory_context
+
+    response_text, tool_calls = await llm.generate(all_messages, augmented_prompt, kernel_state)
 
     # Execute tool calls through AgentProxy
     tool_results: list[ToolResult] = []
@@ -888,6 +983,23 @@ async def chat(req: ChatRequest):
         },
         kernel_state=kernel_state,
     )
+
+    # ─── Memory Store — persist conversation + tool results for future RAG ───
+    try:
+        await memory_client.store_conversation(
+            text=f"User: {req.message}\nAssistant: {response_text[:1000]}",
+            session_id=req.session_id,
+            metadata={"skill": req.skill, "tool_calls": len(tool_results)},
+        )
+        for tr in tool_results:
+            if tr.decision == "ALLOW" and tr.output:
+                await memory_client.store_tool_result(
+                    text=f"Tool: {tr.tool}\nOutput: {tr.output[:2000]}",
+                    session_id=req.session_id,
+                    metadata={"tool": tr.tool, "skill": req.skill},
+                )
+    except Exception:
+        pass  # Don't block response on memory failures
 
     return ChatResponse(
         message=response_text,
@@ -1255,6 +1367,8 @@ async def startup():
     print(f"  AgentProxy: {AGENT_PROXY_URL}")
     print(f"  FlightRecorder: {FLIGHT_RECORDER_URL}")
     print(f"  ReplayEngine: {REPLAY_ENGINE_URL}")
+    mem_ok = await memory_client.check_health()
+    print(f"  Memory: {MEMORY_SERVICE_URL} {'✓' if mem_ok else '✗'}")
     print(f"══════════════════════════════════════════════")
 
 @app.on_event("shutdown")
@@ -1262,3 +1376,4 @@ async def shutdown():
     await tool_executor.close()
     await event_logger.close()
     await replay_client.close()
+    await memory_client.close()

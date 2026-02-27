@@ -1566,3 +1566,494 @@ select.input { cursor: pointer; }
   min-width: 50px;
   text-align: right;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Notifications Tab
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Channel Status ──────────────────────────────────────────── */
+
+.notify-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: border-color 0.2s;
+}
+.ch-row:hover {
+  border-color: var(--cyan-dim);
+}
+
+.ch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ch-dot.ch-on {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(0, 230, 118, 0.5);
+}
+.ch-dot.ch-off {
+  background: var(--text-dim);
+  opacity: 0.5;
+}
+
+.ch-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-bright);
+  text-transform: capitalize;
+}
+
+.ch-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+.ch-badge.on {
+  background: rgba(0, 230, 118, 0.15);
+  color: var(--green);
+  border: 1px solid rgba(0, 230, 118, 0.3);
+}
+.ch-badge.off {
+  background: rgba(100, 116, 139, 0.15);
+  color: var(--text-dim);
+  border: 1px solid rgba(100, 116, 139, 0.2);
+}
+
+.ch-stats {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* ─── HITL Queue ──────────────────────────────────────────────── */
+
+.hitl-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hitl-stat-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  text-align: center;
+}
+.hitl-stat-card .stat-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--cyan);
+  font-family: var(--font-mono);
+}
+.hitl-stat-card .stat-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+.hitl-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hitl-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--amber);
+  border-left: 3px solid var(--amber);
+  border-radius: 6px;
+  padding: 12px;
+  transition: border-color 0.2s;
+}
+.hitl-card:hover {
+  border-color: var(--cyan);
+  border-left-color: var(--cyan);
+}
+
+.hitl-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.hitl-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.hitl-skill {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cyan);
+}
+
+.hitl-ttl {
+  margin-left: auto;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--amber);
+}
+.hitl-ttl.urgent {
+  color: var(--red);
+  animation: pulse-red 1s infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.hitl-reason {
+  font-size: 11px;
+  color: var(--text);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.hitl-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-approve {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1px solid var(--green);
+  background: rgba(0, 230, 118, 0.1);
+  color: var(--green);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-approve:hover {
+  background: rgba(0, 230, 118, 0.25);
+  box-shadow: 0 0 8px rgba(0, 230, 118, 0.3);
+}
+
+.btn-deny {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1px solid var(--red);
+  background: rgba(255, 61, 113, 0.1);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-deny:hover {
+  background: rgba(255, 61, 113, 0.25);
+  box-shadow: 0 0 8px rgba(255, 61, 113, 0.3);
+}
+
+/* ─── Per-Skill Token Burn ────────────────────────────────────── */
+
+.skill-burn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.burn-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 60px 70px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  transition: border-color 0.2s;
+}
+.burn-row:hover {
+  border-color: var(--cyan-dim);
+}
+.burn-row.burn-header {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 10px;
+}
+
+.burn-name {
+  color: var(--text-bright);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.burn-tokens {
+  color: var(--cyan);
+  text-align: right;
+  font-weight: 600;
+}
+
+.burn-calls {
+  color: var(--text);
+  text-align: right;
+}
+
+.burn-avg {
+  color: var(--amber);
+  text-align: right;
+}
+
+/* ─── Notification History ────────────────────────────────────── */
+
+.notify-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.notify-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.notify-entry .ne-time {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 55px;
+  padding-top: 1px;
+}
+
+.notify-entry .ne-channel {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--cyan);
+  white-space: nowrap;
+}
+
+.notify-entry .ne-msg {
+  flex: 1;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.notify-entry .ne-ok {
+  color: var(--green);
+  font-size: 10px;
+}
+.notify-entry .ne-fail {
+  color: var(--red);
+  font-size: 10px;
+}
+
+/* ─── Shared: Count Badge + Empty State ───────────────────────── */
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  background: var(--cyan);
+  color: var(--bg-base);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* ─── Test Notification Button ────────────────────────────────── */
+
+.btn-test-notify {
+  padding: 6px 14px;
+  border: 1px solid var(--cyan);
+  background: rgba(0, 229, 255, 0.08);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-test-notify:hover {
+  background: rgba(0, 229, 255, 0.2);
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Memory Tab
+   ═══════════════════════════════════════════════════════════════ */
+
+.memory-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.input-field {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.input-field:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 4px rgba(0, 229, 255, 0.15);
+}
+.input-field::placeholder {
+  color: var(--text-dim);
+}
+
+textarea.input-field {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.4;
+}
+
+select.input-field {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2364748b'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+}
+
+.btn-primary-sm {
+  padding: 6px 14px;
+  border: 1px solid var(--cyan);
+  background: rgba(0, 229, 255, 0.12);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btn-primary-sm:hover {
+  background: rgba(0, 229, 255, 0.25);
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
+}
+
+.memory-results {
+  max-height: 400px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-result-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  transition: border-color 0.2s;
+}
+.memory-result-card:hover {
+  border-color: var(--cyan-dim);
+}
+
+.mem-result-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.mem-collection {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--cyan);
+}
+
+.mem-score {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--green);
+}
+
+.mem-text {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.mem-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 9px;
+  color: var(--text-dim);
+}
