@@ -75,12 +75,31 @@ func NewSemanticScanner() *SemanticScanner {
 	return &SemanticScanner{}
 }
 
+// scanExemptions maps tool names to TTP IDs that should be skipped.
+// These tools contain free-text instructions that naturally include
+// file path examples, but the content is sandboxed and never executed.
+var scanExemptions = map[string]map[string]bool{
+	"create_skill": {"TTP-003": true, "TTP-008": true, "TTP-009": true, "TTP-011": true, "TTP-012": true},
+	"manage_skill": {"TTP-003": true},
+}
+
 // Check evaluates request against all 14 TTP patterns (gate interface).
 func (s *SemanticScanner) Check(req *models.ToolCallRequest) models.GateResult {
 	start := time.Now()
 
 	content := buildScanContent(req)
 	findings := s.scanContent(content)
+
+	// Filter out exempted patterns for trusted management tools
+	if exempt, ok := scanExemptions[req.Tool]; ok && len(findings) > 0 {
+		filtered := findings[:0]
+		for _, f := range findings {
+			if !exempt[f.ID] {
+				filtered = append(filtered, f)
+			}
+		}
+		findings = filtered
+	}
 
 	if len(findings) > 0 {
 		// Find highest severity
