@@ -392,13 +392,14 @@ class MarkdownKernel:
         parts.append("They will be routed through AgentProxy for security checks.")
         parts.append("")
         parts.append("IMPORTANT — Tool usage guidelines:")
-        parts.append("- For BUILDING apps, games, demos, or any HTML/CSS/JS: use `execute_code` with language='html'")
-        parts.append("- For RUNNING Python/JS/Bash scripts: use `execute_code` with the appropriate language")
-        parts.append("- For READING workspace files: use `file_read`")
-        parts.append("- For WRITING workspace files: use `file_write`")
-        parts.append("- For LISTING files: use `file_list`")
-        parts.append("- For SEARCHING: use `search_workspace`")
+        parts.append("- For BUILDING apps, games, demos, or any HTML/CSS/JS: use `execute_code` with language='html' and a filename")
+        parts.append("- For RUNNING Python/JS/Bash code: use `execute_code` with the appropriate language")
+        parts.append("- For READING files (cat, view, show, open, read): use `file_read` with the path")
+        parts.append("- For WRITING files: use `file_write` with path and content")
+        parts.append("- For LISTING files/directories (ls, dir): use `file_list`")
+        parts.append("- For SEARCHING text (grep, search, find): use `search_workspace`")
         parts.append("- Always prefer `execute_code` over `file_write` when the user wants to BUILD something")
+        parts.append("- When user says 'cat X' or 'read X' or 'show X', ALWAYS use file_read — NEVER use file_list")
 
         return "\n".join(parts)
 
@@ -1300,8 +1301,15 @@ async def chat(req: ChatRequest):
     if memory_context:
         augmented_prompt = system_prompt + "\n\n" + memory_context
 
-    response_text, tool_calls = await llm.generate(all_messages, augmented_prompt, kernel_state)
-    print(f"[Chat] LLM returned: {len(response_text)} chars, {len(tool_calls)} tool_calls")
+    # ─── Shell command pre-parsing (instant, no LLM roundtrip) ───
+    shell_tool_calls = _parse_shell_command(req.message)
+    if shell_tool_calls is not None:
+        response_text = ""
+        tool_calls = shell_tool_calls
+        print(f"[Chat] Shell pre-parsed: {len(tool_calls)} tool_calls (skipped LLM)")
+    else:
+        response_text, tool_calls = await llm.generate(all_messages, augmented_prompt, kernel_state)
+        print(f"[Chat] LLM returned: {len(response_text)} chars, {len(tool_calls)} tool_calls")
 
     # Execute tool calls through AgentProxy
     tool_results: list[ToolResult] = []
@@ -1536,6 +1544,113 @@ async def websocket_events(websocket: WebSocket):
         ws_clients.discard(websocket)
 
 
+# ─── Shell Command Pre-Parser ────────────────────────────────
+# Maps common Unix commands directly to tool calls, bypassing the LLM.
+# This makes ls, cat, grep, etc. instant instead of waiting 60-200s for DeepSeek.
+
+def _parse_shell_command(command: str) -> list[ToolCall] | None:
+    """
+    Parse a shell-like command into direct tool calls.
+    Returns None if the command should be routed to the LLM instead.
+    """
+    parts = command.strip().split()
+    if not parts:
+        return None
+
+    cmd = parts[0].lower()
+    args = parts[1:]
+
+    # ls / dir / ll — list files
+    if cmd in ("ls", "dir", "ll", "la", "l"):
+        path = args[0] if args else ""
+        return [ToolCall(
+            tool="file_list",
+            arguments={"path": path},
+            reason=f"Shell: {command}",
+        )]
+
+    # cat / less / more / head / tail / type — read file
+    if cmd in ("cat", "less", "more", "head", "tail", "type", "view", "show"):
+        if not args:
+            return None  # No file specified → route to LLM
+        filepath = args[0]
+        return [ToolCall(
+            tool="file_read",
+            arguments={"path": filepath},
+            reason=f"Shell: {command}",
+        )]
+
+    # grep / search / find — search workspace
+    if cmd in ("grep", "search", "find", "rg", "ag"):
+        query = " ".join(args) if args else ""
+        if not query:
+            return None
+        return [ToolCall(
+            tool="search_workspace",
+            arguments={"query": query},
+            reason=f"Shell: {command}",
+        )]
+
+    # pwd — show workspace path
+    if cmd == "pwd":
+        return [ToolCall(
+            tool="file_list",
+            arguments={"path": ""},
+            reason="Shell: pwd (show workspace root)",
+        )]
+
+    # echo "content" > file — write file
+    if cmd == "echo" and ">" in command:
+        idx = command.index(">")
+        content = command[4:idx].strip().strip('"').strip("'")
+        filepath = command[idx+1:].strip().lstrip(">").strip()
+        if filepath:
+            return [ToolCall(
+                tool="file_write",
+                arguments={"path": filepath, "content": content + "\n"},
+                reason=f"Shell: {command}",
+            )]
+
+    # touch — create empty file
+    if cmd == "touch" and args:
+        return [ToolCall(
+            tool="file_write",
+            arguments={"path": args[0], "content": ""},
+            reason=f"Shell: {command}",
+        )]
+
+    # scan / security — security scan
+    if cmd in ("scan", "security"):
+        return [ToolCall(
+            tool="security_scan",
+            arguments={"target": " ".join(args) if args else ""},
+            reason=f"Shell: {command}",
+        )]
+
+    # python / node / bash — execute code
+    if cmd in ("python", "python3", "node", "bash", "sh") and args:
+        lang_map = {"python": "python", "python3": "python", "node": "javascript", "bash": "bash", "sh": "bash"}
+        lang = lang_map.get(cmd, "bash")
+        # python -c "code" or python script.py
+        if args[0] == "-c" and len(args) > 1:
+            code = " ".join(args[1:]).strip('"').strip("'")
+            return [ToolCall(
+                tool="execute_code",
+                arguments={"language": lang, "code": code},
+                reason=f"Shell: {command}",
+            )]
+        # Read file and execute
+        filepath = args[0]
+        return [ToolCall(
+            tool="file_read",
+            arguments={"path": filepath},
+            reason=f"Shell: read {filepath} for execution",
+        )]
+
+    # Not a recognized shell command → route to LLM
+    return None
+
+
 @app.websocket("/ws/terminal")
 async def websocket_terminal(websocket: WebSocket):
     """
@@ -1591,6 +1706,37 @@ async def websocket_terminal(websocket: WebSocket):
                 await websocket.send_json({"type": "output", "data": "\x1b[33mGoodbye.\x1b[0m\r\n"})
                 break
 
+            if command == "help":
+                help_text = (
+                    "\x1b[36m── OpenClaw Terminal Commands ──\x1b[0m\r\n"
+                    "\r\n"
+                    "  \x1b[1mShell Commands (instant):\x1b[0m\r\n"
+                    "    ls [path]           List files in workspace\r\n"
+                    "    cat <file>          Read file contents\r\n"
+                    "    grep <query>        Search across workspace files\r\n"
+                    "    touch <file>        Create empty file\r\n"
+                    "    echo 'text' > file  Write text to file\r\n"
+                    "    python -c 'code'    Execute Python code\r\n"
+                    "    scan                Run security scan\r\n"
+                    "\r\n"
+                    "  \x1b[1mBuilt-in Commands:\x1b[0m\r\n"
+                    "    status              Show system status\r\n"
+                    "    help                Show this help\r\n"
+                    "    clear               Clear terminal\r\n"
+                    "    exit                Close terminal\r\n"
+                    "\r\n"
+                    "  \x1b[1mAI Commands (via DeepSeek):\x1b[0m\r\n"
+                    "    build a snake game in html\r\n"
+                    "    explain eureka concepts\r\n"
+                    "    create a fibonacci script\r\n"
+                    "    Any natural language request...\r\n"
+                    "\r\n"
+                    "  All tool calls mediated by \x1b[33mAgentProxy\x1b[0m (Layer 4)\r\n"
+                )
+                await websocket.send_json({"type": "output", "data": help_text})
+                await websocket.send_json({"type": "prompt", "data": "\x1b[32mopenclaw\x1b[0m:\x1b[34m~\x1b[0m$ "})
+                continue
+
             if command == "status":
                 kernel_state = kernel.load_kernel()
                 uptime = time.time() - stats["start_time"]
@@ -1615,15 +1761,25 @@ async def websocket_terminal(websocket: WebSocket):
                 await websocket.send_json({"type": "prompt", "data": "\x1b[32mopenclaw\x1b[0m:\x1b[34m~\x1b[0m$ "})
                 continue
 
-            # Process through AI agent
-            terminal_sessions[session_id].append(ChatMessage(role="user", content=command))
+            # ── Shell command pre-parsing ──
+            # Map common Unix commands directly to tool calls (instant, no LLM roundtrip)
+            shell_tool_calls = _parse_shell_command(command)
             kernel_state = kernel.load_kernel()
             system_prompt = kernel.get_system_prompt(kernel_state)
 
-            # Use the LLM to detect tool calls (native function calling or mock)
-            response_text, tool_calls = await llm.generate(
-                terminal_sessions[session_id], system_prompt, kernel_state
-            )
+            if shell_tool_calls is not None:
+                # Direct tool execution — no LLM needed
+                tool_calls = shell_tool_calls
+                response_text = ""
+                terminal_sessions[session_id].append(ChatMessage(role="user", content=command))
+            else:
+                # Route through AI agent for complex requests
+                terminal_sessions[session_id].append(ChatMessage(role="user", content=command))
+
+                # Use the LLM to detect tool calls (native function calling or mock)
+                response_text, tool_calls = await llm.generate(
+                    terminal_sessions[session_id], system_prompt, kernel_state
+                )
 
             if tool_calls:
                 # Execute tools through AgentProxy
