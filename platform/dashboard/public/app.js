@@ -223,6 +223,10 @@ function connectWebSocket() {
         addEvent(data);
         addProxyEvent(data); // Feed into proxy tab's live stream
       }
+      // Handle skill lifecycle events (create/delete)
+      if (data.type === 'skill_created' || data.type === 'skill_deleted') {
+        handleSkillEvent(data);
+      }
     };
     ws.onclose = () => setTimeout(connectWebSocket, 3000);
     ws.onerror = () => {};
@@ -721,8 +725,16 @@ async function loadSkills() {
     const container = document.getElementById('skills-list');
     container.innerHTML = Object.entries(data.skills).map(([name, caps]) => {
       const isMalicious = name.startsWith('_');
+      const builtinSkills = ['openclaw', 'file-writer', 'web-search'];
+      const isBuiltin = builtinSkills.includes(name);
+      const isGenerated = !isBuiltin && !isMalicious;
+      const trustBadge = isMalicious
+        ? '<span style="background: var(--red); color: #000; padding: 1px 6px; border-radius: 3px; font-size: 9px; margin-left: 6px;">BLOCKED</span>'
+        : isGenerated
+          ? '<span style="background: var(--amber); color: #000; padding: 1px 6px; border-radius: 3px; font-size: 9px; margin-left: 6px;">AGENT-GENERATED</span>'
+          : '<span style="background: var(--green); color: #000; padding: 1px 6px; border-radius: 3px; font-size: 9px; margin-left: 6px;">BUILT-IN</span>';
       return `<div class="skill-card">
-        <div class="skill-name ${isMalicious ? 'malicious' : ''}">${isMalicious ? '⚠ ' : ''}${name}</div>
+        <div class="skill-name ${isMalicious ? 'malicious' : ''}">${isMalicious ? '⚠ ' : ''}${name}${trustBadge}</div>
         <div class="skill-caps">
           ${caps.map(c => `<span class="cap-tag">${c}</span>`).join('')}
           ${caps.length === 0 ? '<span style="color: var(--text-dim); font-size: 10px;">No capabilities declared</span>' : ''}
@@ -739,6 +751,52 @@ async function reloadSkills() {
     await fetch(`${API.proxy}/api/v1/skills/reload`, { method: 'POST' });
     await loadSkills();
   } catch {}
+}
+
+// Handle skill lifecycle events from WebSocket
+function handleSkillEvent(data) {
+  const isCreate = data.type === 'skill_created';
+  const action = isCreate ? 'CREATED' : 'DELETED';
+  const icon = isCreate ? '✨' : '🗑️';
+  const color = isCreate ? 'var(--green)' : 'var(--amber)';
+
+  // Show toast notification
+  showSkillToast(`${icon} Skill '${data.skill}' ${action}`, color);
+
+  // Refresh skills list
+  loadSkills();
+
+  // Add to event stream
+  const stream = document.getElementById('event-stream');
+  if (stream) {
+    const el = document.createElement('div');
+    el.className = 'event-item';
+    el.innerHTML = `
+      <span class="event-time">${new Date(data.timestamp).toLocaleTimeString()}</span>
+      <span class="event-badge" style="background: ${color}; color: #000">${action}</span>
+      <span class="event-detail"><strong>${data.skill}</strong> — ${data.description || 'skill lifecycle event'}</span>
+    `;
+    stream.insertBefore(el, stream.firstChild);
+  }
+}
+
+function showSkillToast(message, color) {
+  const toast = document.createElement('div');
+  toast.style.cssText = `
+    position: fixed; top: 20px; right: 20px; z-index: 10000;
+    background: ${color || 'var(--green)'}; color: #000;
+    padding: 12px 20px; border-radius: 8px;
+    font-weight: 600; font-size: 13px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    animation: slideIn 0.3s ease;
+  `;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.3s';
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
 }
 
 // ─── Demo Attack ─────────────────────────────────────────────────

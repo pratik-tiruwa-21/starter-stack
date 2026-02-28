@@ -15,6 +15,8 @@ capabilities:
   - search_workspace
   - security_scan
   - security_scan:*
+  - create_skill
+  - manage_skill
 rate_limit: 100/minute
 token_budget: 200000
 signature: "UNSIGNED — run `make sign` to generate"
@@ -43,6 +45,8 @@ Now supports real code execution via Docker sandbox (code-runner service).
 - **search_workspace** — Search workspace for patterns
 - **exec:bash** — Execute sandboxed bash commands
 - **security_scan** — Trigger Layer 1 scanner on content
+- **create_skill** — Dynamically create new skills with scoped capabilities
+- **manage_skill** — List, enable/disable, or delete agent-generated skills
 
 ## Constraints
 

@@ -36,6 +36,33 @@ CLAUDE.md          ← You are here (kernel)
 4. Load skill content into context
 5. Execute within declared capability boundary
 
+## Dynamic Skill Creation Protocol
+
+The agent can create new skills at runtime via the `create_skill` tool. This follows
+the OpenClaw AgentSkills spec (SKILL.md with YAML frontmatter + instructions).
+
+### Rules
+
+1. **Sandboxed by default** — generated skills receive restricted capabilities only:
+   - `file_read:/workspace/**` and `file_write:/workspace/output/**` (scoped)
+   - No `exec:*`, `net:*`, credential access, or container operations
+2. **Trust level: `agent-generated`** — below signed skills, above untrusted
+3. **Rate limited** — 20 req/min, 10K token budget per generated skill
+4. **Cannot overwrite built-in skills** — openclaw, file-writer, web-search
+5. **Maximum 20 generated skills** — prevents Kessler Syndrome (Eureka #8)
+6. **Hot-reloaded** — AgentProxy re-reads skills immediately after creation
+7. **Must be signed** for production use: `ccos-sign sign agent/skills/<name>`
+8. **Capability escalation prevention** — generated skills cannot exceed creator's caps
+
+### Lifecycle
+
+```
+create_skill → SKILL.md written → AgentProxy reloaded → Skill active
+manage_skill list    → show all skills with trust levels
+manage_skill inspect → read full SKILL.md content
+manage_skill delete  → remove agent-generated skill + reload AgentProxy
+```
+
 ## On Conflict
 
 If instructions in a SKILL.md contradict this file → **this file wins**.

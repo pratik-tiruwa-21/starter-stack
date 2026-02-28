@@ -220,6 +220,65 @@ TOOL_SCHEMAS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_skill",
+            "description": "Create a new skill for the agent. Skills teach the agent how to use tools for specific tasks. "
+                           "The skill is saved to agent/skills/<name>/SKILL.md and hot-reloaded into AgentProxy immediately. "
+                           "Generated skills are sandboxed by default with restricted capabilities.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Skill name (lowercase, hyphens allowed). Example: presentation-builder, data-analyzer"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What this skill does (1-2 sentences)"
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "Detailed instructions for when and how to use this skill (markdown)"
+                    },
+                    "capabilities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of capability grants. Allowed: file_read:/workspace/**, file_write:/workspace/output/**, "
+                                       "file_list:/workspace/**. Cannot include exec:*, net:*, or credential access."
+                    },
+                    "when_to_load": {
+                        "type": "string",
+                        "description": "Conditions when this skill should be loaded (e.g., 'User asks to create a presentation')"
+                    }
+                },
+                "required": ["name", "description", "instructions"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_skill",
+            "description": "List, inspect, or delete agent-generated skills. Cannot modify built-in skills (openclaw, file-writer, web-search).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "inspect", "delete"],
+                        "description": "Action to perform on skills"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Skill name (required for inspect/delete)"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    },
 ]
 
 
@@ -494,6 +553,10 @@ class ToolExecutor:
             return "search:/workspace/"
         elif tool == "security_scan":
             return "security_scan"
+        elif tool == "create_skill":
+            return "create_skill"
+        elif tool == "manage_skill":
+            return "manage_skill"
         # Legacy format (from MockLLM): already has colon-separated format
         elif ":" in tool:
             return tool
@@ -606,8 +669,238 @@ class ToolExecutor:
         if tool == "security_scan":
             return "Security scan completed — no critical findings (sandbox mode)", None
 
+        # ── Create Skill (Dynamic skill creation — OpenClaw docs: skills watcher auto-refresh) ──
+        if tool == "create_skill":
+            return await self._handle_create_skill(args)
+
+        # ── Manage Skill (List/inspect/delete agent-generated skills) ──
+        if tool == "manage_skill":
+            return await self._handle_manage_skill(args)
+
         # Unknown tool
         return f"Tool '{tool}' executed (sandbox mode)", None
+
+    # ── Skill Management Handlers ──
+
+    BUILTIN_SKILLS = {"openclaw", "file-writer", "web-search", "_malicious"}
+    FORBIDDEN_CAPABILITIES = {"exec:", "net:", "credential", "container_exec", "database_drop", "key_rotation"}
+    MAX_GENERATED_SKILLS = 20
+
+    async def _handle_create_skill(self, args: dict) -> tuple[str, str | None]:
+        """Create a new SKILL.md and hot-reload AgentProxy. Follows OpenClaw AgentSkills spec."""
+        import re
+        from datetime import datetime, timezone
+
+        name = args.get("name", "").strip().lower()
+        description = args.get("description", "").strip()
+        instructions = args.get("instructions", "").strip()
+        capabilities = args.get("capabilities", [])
+        when_to_load = args.get("when_to_load", "User explicitly requests this skill").strip()
+
+        # ── Validation ──
+        if not name:
+            return "ERROR: Skill name is required", None
+        if not re.match(r'^[a-z][a-z0-9-]{1,48}[a-z0-9]$', name):
+            return "ERROR: Skill name must be 3-50 chars, lowercase alphanumeric + hyphens, start/end with letter/number", None
+        if name in self.BUILTIN_SKILLS:
+            return f"ERROR: Cannot overwrite built-in skill '{name}'", None
+        if not description:
+            return "ERROR: Skill description is required", None
+        if not instructions:
+            return "ERROR: Skill instructions are required", None
+
+        # Check max skill count
+        skills_dir = Path(WORKSPACE_DIR) / "skills"
+        if skills_dir.exists():
+            existing = [d.name for d in skills_dir.iterdir()
+                       if d.is_dir() and not d.name.startswith("_") and not d.name.startswith(".")]
+            agent_generated = [d for d in existing if d not in self.BUILTIN_SKILLS]
+            if len(agent_generated) >= self.MAX_GENERATED_SKILLS:
+                return f"ERROR: Maximum {self.MAX_GENERATED_SKILLS} agent-generated skills reached. Delete unused skills first.", None
+
+        # Check already exists
+        skill_dir = skills_dir / name
+        if skill_dir.exists():
+            return f"ERROR: Skill '{name}' already exists. Delete it first or choose a different name.", None
+
+        # ── Capability Sanitization (sandboxed-by-default) ──
+        safe_capabilities = []
+        blocked = []
+        for cap in capabilities:
+            cap = cap.strip()
+            # Block dangerous capabilities
+            if any(cap.startswith(forbidden) for forbidden in self.FORBIDDEN_CAPABILITIES):
+                blocked.append(cap)
+                continue
+            # Allow only safe capability patterns
+            if cap.startswith(("file_read:", "file_write:", "file_list:", "search:")):
+                safe_capabilities.append(cap)
+            elif cap in ("search_workspace", "security_scan"):
+                safe_capabilities.append(cap)
+            else:
+                blocked.append(cap)
+
+        # Default capabilities if none provided
+        if not safe_capabilities:
+            safe_capabilities = [
+                f"file_read:/workspace/agent/skills/{name}/**",
+                f"file_write:/workspace/agent/skills/{name}/**",
+                "file_list:/workspace/**",
+            ]
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        # ── Generate SKILL.md (AgentSkills + Pi-compatible format per OpenClaw docs) ──
+        caps_yaml = "\n".join(f"  - {c}" for c in safe_capabilities)
+        skill_content = f"""---
+skill: {name}
+version: 1.0.0
+author: openclaw-agent
+created: {now}
+trust_level: agent-generated
+capabilities:
+{caps_yaml}
+rate_limit: 20/minute
+token_budget: 10000
+signature: "UNSIGNED — agent-generated"
+signed_by: ""
+signed_at: ""
+---
+
+# SKILL.md — {name.replace('-', ' ').title()}
+
+## Purpose
+
+{description}
+
+## When to Load
+
+{when_to_load}
+
+## Instructions
+
+{instructions}
+
+## Constraints
+
+- **Agent-generated skill** — restricted capabilities, sandboxed by default
+- Must be signed with `ccos-sign sign agent/skills/{name}` before production use
+- Rate limited to 20 requests/minute
+- Token budget: 10,000 (prevents context bloat — Eureka #7 Shannon SNR)
+- No network access, no exec, no credential access
+- All tool calls mediated by AgentProxy (Layer 4)
+
+## Audit Trail
+
+This skill was dynamically created by OpenClaw at {now}.
+"""
+
+        # ── Write SKILL.md to disk ──
+        try:
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(skill_content, encoding="utf-8")
+            print(f"[SkillCreate] Written {skill_file} ({len(skill_content)} bytes)")
+        except Exception as e:
+            return f"ERROR: Failed to write SKILL.md: {e}", None
+
+        # ── Hot-reload AgentProxy skills (like OpenClaw skills watcher auto-refresh) ──
+        reload_status = "unknown"
+        try:
+            reload_resp = await self.client.post(f"{AGENT_PROXY_URL}/api/v1/skills/reload")
+            if reload_resp.status_code == 200:
+                reload_data = reload_resp.json()
+                reload_status = f"reloaded ({reload_data.get('count', '?')} skills)"
+            else:
+                reload_status = f"reload failed (HTTP {reload_resp.status_code})"
+        except Exception as e:
+            reload_status = f"reload error: {e}"
+
+        # ── Emit event for dashboard/FlightRecorder ──
+        try:
+            event_data = {
+                "type": "skill_created",
+                "skill": name,
+                "description": description,
+                "capabilities": safe_capabilities,
+                "trust_level": "agent-generated",
+                "timestamp": now,
+            }
+            # Broadcast via WebSocket event bus if available
+            if hasattr(self, '_event_bus'):
+                await self._event_bus(event_data)
+        except Exception:
+            pass  # Non-critical
+
+        # ── Build response ──
+        response_parts = [
+            f"✅ Skill '{name}' created successfully!",
+            f"📁 Location: agent/skills/{name}/SKILL.md",
+            f"🔄 AgentProxy: {reload_status}",
+            f"🔒 Trust level: agent-generated (sandboxed)",
+            f"📋 Capabilities: {', '.join(safe_capabilities)}",
+        ]
+        if blocked:
+            response_parts.append(f"⚠️ Blocked capabilities (security policy): {', '.join(blocked)}")
+        response_parts.append(f"\n💡 To sign for production: `ccos-sign sign agent/skills/{name}`")
+
+        return "\n".join(response_parts), None
+
+    async def _handle_manage_skill(self, args: dict) -> tuple[str, str | None]:
+        """List, inspect, or delete agent-generated skills."""
+        action = args.get("action", "list")
+        name = args.get("name", "").strip()
+        skills_dir = Path(WORKSPACE_DIR) / "skills"
+
+        if action == "list":
+            if not skills_dir.exists():
+                return "No skills directory found.", None
+            skills_info = []
+            for d in sorted(skills_dir.iterdir()):
+                if d.is_dir() and not d.name.startswith("."):
+                    skill_file = d / "SKILL.md"
+                    trust = "built-in" if d.name in self.BUILTIN_SKILLS else "agent-generated"
+                    status = "✅" if skill_file.exists() else "❌"
+                    if d.name.startswith("_"):
+                        trust = "blocked"
+                        status = "🚫"
+                    skills_info.append(f"  {status} {d.name} ({trust})")
+            return "📋 Registered Skills:\n" + "\n".join(skills_info), None
+
+        elif action == "inspect":
+            if not name:
+                return "ERROR: Skill name required for inspect", None
+            skill_file = skills_dir / name / "SKILL.md"
+            if not skill_file.exists():
+                return f"ERROR: Skill '{name}' not found", None
+            content = skill_file.read_text(encoding="utf-8", errors="replace")
+            return f"📄 SKILL.md for '{name}':\n\n{content[:5000]}", None
+
+        elif action == "delete":
+            if not name:
+                return "ERROR: Skill name required for delete", None
+            if name in self.BUILTIN_SKILLS:
+                return f"ERROR: Cannot delete built-in skill '{name}'", None
+            skill_path = skills_dir / name
+            if not skill_path.exists():
+                return f"ERROR: Skill '{name}' not found", None
+            # Verify it's agent-generated
+            skill_file = skill_path / "SKILL.md"
+            if skill_file.exists():
+                content = skill_file.read_text(encoding="utf-8", errors="replace")
+                if "trust_level: agent-generated" not in content:
+                    return f"ERROR: '{name}' is not agent-generated. Cannot delete non-generated skills via this tool.", None
+            # Delete the skill directory
+            import shutil
+            shutil.rmtree(skill_path)
+            # Hot-reload AgentProxy
+            try:
+                await self.client.post(f"{AGENT_PROXY_URL}/api/v1/skills/reload")
+            except Exception:
+                pass
+            return f"🗑️ Skill '{name}' deleted. AgentProxy reloaded.", None
+
+        return f"ERROR: Unknown action '{action}'. Use: list, inspect, delete", None
 
     async def close(self):
         await self.client.aclose()

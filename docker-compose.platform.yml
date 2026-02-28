@@ -144,6 +144,7 @@ services:
       - LOG_LEVEL=info
     volumes:
       - ./agent:/workspace/agent:ro
+      - ./agent/skills:/workspace/agent/skills:rw   # Writable overlay for dynamic skill creation
     depends_on:
       agent-proxy:
         condition: service_healthy
