@@ -145,6 +145,7 @@ services:
     volumes:
       - ./agent:/workspace/agent:ro
       - ./agent/skills:/workspace/agent/skills:rw   # Writable overlay for dynamic skill creation
+      - ./agent/output:/workspace/agent/output:rw   # Writable overlay for agent-generated files
     depends_on:
       agent-proxy:
         condition: service_healthy

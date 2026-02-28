@@ -50,6 +50,8 @@ REPLAY_ENGINE_URL = os.getenv("REPLAY_ENGINE_URL", "http://replay-engine:8404")
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory-service:8405")
 CODE_RUNNER_URL = os.getenv("CODE_RUNNER_URL", "http://code-runner:8406")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/workspace")
+# Basename of WORKSPACE_DIR for stripping duplicate prefixes from LLM-generated paths
+_WS_BASENAME = Path(WORKSPACE_DIR).name  # e.g. "agent"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
@@ -57,6 +59,24 @@ MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-chat")
 
 # Determine mode: function_calling (real AI) or demo (mock)
 LLM_MODE = "function_calling" if (DEEPSEEK_API_KEY or OPENAI_API_KEY) else "demo"
+
+
+def _resolve_workspace_path(filepath: str) -> Path:
+    """Resolve a file path relative to WORKSPACE_DIR, handling duplicate prefixes.
+
+    LLMs often generate paths like 'agent/skills/...' when WORKSPACE_DIR already
+    points to /workspace/agent, producing /workspace/agent/agent/skills/...
+    This helper strips the duplicate prefix.
+    """
+    if not filepath or filepath == ".":
+        return Path(WORKSPACE_DIR)
+    if filepath.startswith("/"):
+        return Path(filepath)
+    # Strip leading duplicate basename: "agent/foo" → "foo" when WORKSPACE_DIR is /workspace/agent
+    stripped = filepath.lstrip("/")
+    if stripped.startswith(_WS_BASENAME + "/"):
+        stripped = stripped[len(_WS_BASENAME) + 1:]
+    return Path(WORKSPACE_DIR) / stripped
 
 # ═══════════════════════════════════════════════════════════════
 # Models
@@ -617,10 +637,7 @@ class ToolExecutor:
             filepath = args.get("path", "")
             if not filepath and ":" in tool:
                 filepath = tool.split(":", 1)[1]
-            if filepath.startswith("/"):
-                full_path = Path(filepath)
-            else:
-                full_path = Path(WORKSPACE_DIR) / filepath.lstrip("/")
+            full_path = _resolve_workspace_path(filepath)
             if full_path.exists() and full_path.is_file():
                 content = full_path.read_text(encoding="utf-8", errors="replace")
                 return content[:10000], None
@@ -632,10 +649,7 @@ class ToolExecutor:
             if not filepath and ":" in tool:
                 filepath = tool.split(":", 1)[1]
             content = args.get("content", "")
-            if filepath.startswith("/"):
-                full_path = Path(filepath)
-            else:
-                full_path = Path(WORKSPACE_DIR) / filepath.lstrip("/")
+            full_path = _resolve_workspace_path(filepath)
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
             return f"Written {len(content)} bytes to {filepath}", None
@@ -643,14 +657,11 @@ class ToolExecutor:
         # ── File List ──
         if tool == "file_list" or (isinstance(tool, str) and tool.startswith("file_list")):
             path_arg = args.get("path", "")
-            if path_arg.startswith("/"):
-                target = Path(path_arg)
-            else:
-                target = Path(WORKSPACE_DIR) / (path_arg or ".")
+            target = _resolve_workspace_path(path_arg or ".")
             if target.exists() and target.is_dir():
                 files = [str(p.relative_to(target)) for p in target.rglob("*") if p.is_file()]
                 return "\n".join(files[:100]), None
-            return f"Directory not found: {target}", None
+            return f"Directory not found: {path_arg}", None
 
         # ── Search ──
         if tool == "search_workspace" or (isinstance(tool, str) and tool.startswith("search")):
