@@ -9,6 +9,8 @@ const API = {
   recorder: '/api/recorder',
   openclaw: '/api/openclaw',
   replay: '/api/replay',
+  memory: '/api/memory',
+  runner: '/api/runner',
 };
 
 let ws = null;
@@ -1975,11 +1977,11 @@ window.switchTab = function(tab) {
 
 // ─── Memory Tab ──────────────────────────────────────────────────
 
-const MEMORY_API = 'http://localhost:8405';
+const MEMORY_API = API.memory;
 
 async function loadMemoryStats() {
   try {
-    const resp = await fetch(`${MEMORY_API}/api/v1/memory/stats`);
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/stats`, { signal: AbortSignal.timeout(5000) });
     const data = await resp.json();
     document.getElementById('mem-total').textContent = data.total_points;
     document.getElementById('mem-conversations').textContent = data.collections.conversations || 0;
@@ -2005,7 +2007,7 @@ async function loadMemoryStats() {
 
 async function loadMemoryCollections() {
   try {
-    const resp = await fetch(`${MEMORY_API}/api/v1/memory/collections`);
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/collections`, { signal: AbortSignal.timeout(5000) });
     const data = await resp.json();
     const el = document.getElementById('memory-collections');
     el.innerHTML = data.collections.map(c => `
@@ -2030,7 +2032,7 @@ async function searchMemory() {
   el.innerHTML = '<div class="empty-state">Searching...</div>';
 
   try {
-    const resp = await fetch(`${MEMORY_API}/api/v1/memory/search`, {
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/search`, { signal: AbortSignal.timeout(10000),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, collection, limit: 10, score_threshold: 0.25 })
@@ -2071,7 +2073,7 @@ async function storeMemory() {
   if (!text) { resultEl.textContent = 'Enter text to store'; return; }
 
   try {
-    const resp = await fetch(`${MEMORY_API}/api/v1/memory/store`, {
+    const resp = await fetch(`${MEMORY_API}/api/v1/memory/store`, { signal: AbortSignal.timeout(10000),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, text, session_id: 'dashboard', metadata: { source: 'dashboard' } })

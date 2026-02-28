@@ -1,0 +1,122 @@
+# ═══ AgentProxy — Layer 4 (Reference Monitor) ═══
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-proxy
+  namespace: ccos
+  labels:
+    app.kubernetes.io/name: agent-proxy
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: agent-proxy
+    ccos/layer: "4"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-proxy
+        app.kubernetes.io/part-of: clawdcontext-os
+        ccos/layer: "4"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: agent-proxy
+          image: ghcr.io/yaamwebsolutions/ccos-agent-proxy:latest
+          ports:
+            - containerPort: 8400
+              name: http
+              protocol: TCP
+          env:
+            - name: SKILLS_DIR
+              value: /workspace/agent/skills
+            - name: PROXY_PORT
+              value: "8400"
+            - name: MAX_RATE_RPM
+              value: "120"
+            - name: CER_WARN
+              value: "0.4"
+            - name: CER_CRIT
+              value: "0.2"
+            - name: AUDIT_FILE
+              value: /data/audit/chain.jsonl
+            - name: CCOS_HITL_TIMEOUT
+              value: "300"
+            - name: CCOS_PROXY_PUBLIC_URL
+              value: "http://agent-proxy.ccos.svc.cluster.local:8400"
+            # Notification secrets (from ccos-secrets)
+            - name: CCOS_NTFY_URL
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_NTFY_URL, optional: true } }
+            - name: CCOS_NTFY_TOPIC
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_NTFY_TOPIC, optional: true } }
+            - name: CCOS_NTFY_TOKEN
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_NTFY_TOKEN, optional: true } }
+            - name: CCOS_DISCORD_WEBHOOK
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_DISCORD_WEBHOOK, optional: true } }
+            - name: CCOS_TELEGRAM_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_TELEGRAM_BOT_TOKEN, optional: true } }
+            - name: CCOS_TELEGRAM_CHAT_ID
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_TELEGRAM_CHAT_ID, optional: true } }
+            - name: CCOS_SLACK_WEBHOOK
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_SLACK_WEBHOOK, optional: true } }
+            - name: CCOS_MATRIX_HOMESERVER
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_MATRIX_HOMESERVER, optional: true } }
+            - name: CCOS_MATRIX_ROOM_ID
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_MATRIX_ROOM_ID, optional: true } }
+            - name: CCOS_MATRIX_ACCESS_TOKEN
+              valueFrom: { secretKeyRef: { name: ccos-secrets, key: CCOS_MATRIX_ACCESS_TOKEN, optional: true } }
+          volumeMounts:
+            - name: audit
+              mountPath: /data/audit
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: audit
+          persistentVolumeClaim:
+            claimName: proxy-audit
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-proxy
+  namespace: ccos
+  labels:
+    app.kubernetes.io/name: agent-proxy
+    app.kubernetes.io/part-of: clawdcontext-os
+spec:
+  selector:
+    app.kubernetes.io/name: agent-proxy
+  ports:
+    - port: 8400
+      targetPort: http
+      protocol: TCP
+      name: http
+  type: ClusterIP

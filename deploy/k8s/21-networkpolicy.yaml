@@ -1,0 +1,97 @@
+# ═══ ClawdContext OS — Network Policies ═══
+# Restrict traffic to only allowed paths between services.
+# Default deny all ingress, then allow specific flows.
+
+# ─── Default Deny All Ingress ───
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+# ─── Dashboard: allow from Ingress controller + external ───
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dashboard-ingress
+  namespace: ccos
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    # From ingress controller (typically in ingress-nginx namespace)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 3000
+          protocol: TCP
+
+# ─── Backend services: allow from dashboard (nginx proxy) ───
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-dashboard
+  namespace: ccos
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - agent-proxy
+          - scanner-api
+          - flight-recorder
+          - openclaw
+          - replay-engine
+          - memory-service
+          - code-runner
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dashboard
+    # Also allow inter-service communication within ccos namespace
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: clawdcontext-os
+
+# ─── Qdrant: only from memory-service ───
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-qdrant-from-memory
+  namespace: ccos
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: memory-service
+      ports:
+        - port: 6333
+          protocol: TCP
+        - port: 6334
+          protocol: TCP

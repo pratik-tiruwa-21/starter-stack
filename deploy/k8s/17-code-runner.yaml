@@ -1,0 +1,93 @@
+# ═══ Code Runner — Sandboxed Execution ═══
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-runner
+  namespace: ccos
+  labels:
+    app.kubernetes.io/name: code-runner
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: code-runner
+    ccos/layer: sandbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: code-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: code-runner
+        app.kubernetes.io/part-of: clawdcontext-os
+        ccos/layer: sandbox
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: code-runner
+          image: ghcr.io/yaamwebsolutions/ccos-code-runner:latest
+          ports:
+            - containerPort: 8406
+              name: http
+              protocol: TCP
+          env:
+            - name: MAX_TIMEOUT
+              value: "30"
+            - name: MAX_OUTPUT
+              value: "102400"
+            - name: SANDBOX_DIR
+              value: /sandbox
+            - name: PERSIST_DIR
+              value: /persist
+          volumeMounts:
+            - name: persist
+              mountPath: /persist
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            # Code runner needs write to /sandbox — runs as root in container
+            # Use PodSecurityPolicy or OPA/Gatekeeper to restrict further
+            readOnlyRootFilesystem: false
+      volumes:
+        - name: persist
+          persistentVolumeClaim:
+            claimName: code-runner-persist
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: code-runner
+  namespace: ccos
+  labels:
+    app.kubernetes.io/name: code-runner
+    app.kubernetes.io/part-of: clawdcontext-os
+spec:
+  selector:
+    app.kubernetes.io/name: code-runner
+  ports:
+    - port: 8406
+      targetPort: http
+      protocol: TCP
+      name: http
+  type: ClusterIP

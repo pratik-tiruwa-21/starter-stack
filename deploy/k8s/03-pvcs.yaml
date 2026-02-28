@@ -1,0 +1,57 @@
+# ═══ ClawdContext OS — PersistentVolumeClaims ═══
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: proxy-audit
+  namespace: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: agent-proxy
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: replay-data
+  namespace: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: replay-engine
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-data
+  namespace: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: qdrant
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: code-runner-persist
+  namespace: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: code-runner
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi

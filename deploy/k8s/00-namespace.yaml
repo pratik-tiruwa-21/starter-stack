@@ -1,0 +1,8 @@
+# ═══ ClawdContext OS — Namespace ═══
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/managed-by: kubectl

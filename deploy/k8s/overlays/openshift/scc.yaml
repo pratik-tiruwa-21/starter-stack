@@ -1,0 +1,33 @@
+# ═══ ClawdContext OS — OpenShift SCC (SecurityContextConstraints) ═══
+# Grants restricted SCC to the ccos service accounts.
+# Most services run as non-root; code-runner needs additional privileges.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: ccos-scc
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+allowPrivilegedContainer: false
+allowPrivilegeEscalation: false
+allowHostDirVolumePlugin: false
+allowHostNetwork: false
+allowHostPorts: false
+allowHostPID: false
+allowHostIPC: false
+runAsUser:
+  type: MustRunAsRange
+seLinuxContext:
+  type: MustRunAs
+fsGroup:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - emptyDir
+  - persistentVolumeClaim
+  - projected
+  - secret
+  - downwardAPI
+users:
+  - system:serviceaccount:ccos:default

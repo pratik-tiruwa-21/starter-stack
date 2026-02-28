@@ -1,0 +1,20 @@
+# ═══ ClawdContext OS — OpenShift Overlay ═══
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../              # Base K8s manifests
+  - route.yaml          # OpenShift Route (replaces Ingress)
+  - scc.yaml            # SecurityContextConstraints
+
+# Remove the Kubernetes Ingress (OpenShift uses Routes)
+patches:
+  - target:
+      kind: Ingress
+      name: ccos-ingress
+    patch: |
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ccos-ingress

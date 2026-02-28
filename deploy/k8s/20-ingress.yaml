@@ -1,0 +1,43 @@
+# ═══ ClawdContext OS — Ingress ═══
+# Routes external traffic to the dashboard nginx reverse proxy.
+# All backend services are accessed through nginx proxy_pass.
+#
+# For TLS: create secret first:
+#   kubectl create secret tls ccos-tls --cert=cert.pem --key=key.pem -n ccos
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ccos-ingress
+  namespace: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+  annotations:
+    # NGINX Ingress Controller annotations
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # WebSocket support
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+    # Rate limiting at ingress level (optional — nginx inside dashboard also rate-limits)
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ccos.example.com
+      secretName: ccos-tls
+  rules:
+    - host: ccos.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard
+                port:
+                  number: 3000

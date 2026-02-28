@@ -1,0 +1,53 @@
+# ═══ ClawdContext OS — Kustomize Base ═══
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ccos
+
+commonLabels:
+  app.kubernetes.io/part-of: clawdcontext-os
+  app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - 00-namespace.yaml
+  - 01-secrets.yaml
+  - 02-configmap-nginx.yaml
+  - 03-pvcs.yaml
+  - 10-agent-proxy.yaml
+  - 11-scanner-api.yaml
+  - 12-flight-recorder.yaml
+  - 13-openclaw.yaml
+  - 14-replay-engine.yaml
+  - 15-qdrant.yaml
+  - 16-memory-service.yaml
+  - 17-code-runner.yaml
+  - 18-dashboard.yaml
+  - 20-ingress.yaml
+  - 21-networkpolicy.yaml
+
+# Override images for your registry:
+# images:
+#   - name: ghcr.io/yaamwebsolutions/ccos-agent-proxy
+#     newName: your-registry.example.com/ccos-agent-proxy
+#     newTag: v1.0.0
+#   - name: ghcr.io/yaamwebsolutions/ccos-scanner-api
+#     newName: your-registry.example.com/ccos-scanner-api
+#     newTag: v1.0.0
+#   - name: ghcr.io/yaamwebsolutions/ccos-flight-recorder
+#     newName: your-registry.example.com/ccos-flight-recorder
+#     newTag: v1.0.0
+#   - name: ghcr.io/yaamwebsolutions/ccos-openclaw
+#     newName: your-registry.example.com/ccos-openclaw
+#     newTag: v1.0.0
+#   - name: ghcr.io/yaamwebsolutions/ccos-replay-engine
+#     newName: your-registry.example.com/ccos-replay-engine
+#     newTag: v1.0.0
+#   - name: ghcr.io/yaamwebsolutions/ccos-memory-service
+#     newName: your-registry.example.com/ccos-memory-service
+#     newTag: v1.0.0
+#   - name: ghcr.io/yaamwebsolutions/ccos-code-runner
+#     newName: your-registry.example.com/ccos-code-runner
+#     newTag: v1.0.0
+#   - name: ghcr.io/yaamwebsolutions/ccos-dashboard
+#     newName: your-registry.example.com/ccos-dashboard
+#     newTag: v1.0.0

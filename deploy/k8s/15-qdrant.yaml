@@ -1,0 +1,89 @@
+# ═══ Qdrant — Vector Database ═══
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: ccos
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: qdrant
+    ccos/layer: memory
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate    # Qdrant needs exclusive lock on storage
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant
+        app.kubernetes.io/part-of: clawdcontext-os
+        ccos/layer: memory
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.6
+          ports:
+            - containerPort: 6333
+              name: http
+              protocol: TCP
+            - containerPort: 6334
+              name: grpc
+              protocol: TCP
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: qdrant-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: ccos
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/part-of: clawdcontext-os
+spec:
+  selector:
+    app.kubernetes.io/name: qdrant
+  ports:
+    - port: 6333
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: 6334
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
+  type: ClusterIP

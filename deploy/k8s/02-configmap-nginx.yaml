@@ -1,0 +1,291 @@
+# ═══ ClawdContext OS — Nginx ConfigMap (K8s-specific) ═══
+# Same as platform/dashboard/nginx.conf but with kube-dns resolver
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-nginx-conf
+  namespace: ccos
+  labels:
+    app.kubernetes.io/part-of: clawdcontext-os
+    app.kubernetes.io/component: dashboard
+data:
+  default.conf: |
+    # ═══════════════════════════════════════════════════════════════════
+    # ClawdContext OS — Dashboard Reverse Proxy (Kubernetes)
+    # ═══════════════════════════════════════════════════════════════════
+    # All microservice traffic flows through this nginx instance.
+    # Uses kube-dns for service discovery (CoreDNS).
+    # ═══════════════════════════════════════════════════════════════════
+
+    proxy_buffers 16 16k;
+    proxy_buffer_size 16k;
+    proxy_busy_buffers_size 32k;
+
+    limit_req_zone $binary_remote_addr zone=api_general:10m rate=30r/s;
+    limit_req_zone $binary_remote_addr zone=api_chat:10m rate=5r/s;
+    limit_req_zone $binary_remote_addr zone=api_scan:10m rate=10r/s;
+
+    server {
+        listen 3000;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # K8s: CoreDNS (kube-dns service in kube-system)
+        resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+
+        # ─── Compression ───
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 4;
+        gzip_types text/plain text/css application/javascript application/json
+                   application/xml text/xml image/svg+xml;
+        gzip_min_length 256;
+
+        # ─── Logging ───
+        access_log /var/log/nginx/access.log combined buffer=16k flush=5s;
+        error_log  /var/log/nginx/error.log warn;
+
+        # ─── Security Headers ───
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "0" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self' blob:; font-src 'self' data:;" always;
+
+        # ─── Health Endpoints (K8s probes) ───
+        location = /healthz {
+            access_log off;
+            default_type application/json;
+            return 200 '{"status":"ok","service":"dashboard"}';
+        }
+        location = /readyz {
+            access_log off;
+            default_type application/json;
+            return 200 '{"status":"ready","service":"dashboard"}';
+        }
+
+        # ─── Static Files ───
+        location / {
+            try_files $uri $uri/ /index.html;
+            location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?|ttf|eot)$ {
+                expires 7d;
+                add_header Cache-Control "public, immutable";
+                access_log off;
+            }
+        }
+
+        # ═══ HTTP Reverse Proxies ═══
+
+        # ─── AgentProxy (Layer 4) ───
+        location /api/proxy/ {
+            limit_req zone=api_general burst=20 nodelay;
+            set $upstream_proxy agent-proxy.ccos.svc.cluster.local;
+            rewrite ^/api/proxy/(.*) /$1 break;
+            proxy_pass http://$upstream_proxy:8400;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 30s;
+            proxy_send_timeout 10s;
+        }
+
+        # ─── Scanner API (Layer 1) ───
+        location /api/scanner/ {
+            limit_req zone=api_scan burst=10 nodelay;
+            set $upstream_scanner scanner-api.ccos.svc.cluster.local;
+            rewrite ^/api/scanner/(.*) /$1 break;
+            proxy_pass http://$upstream_scanner:8401;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 60s;
+            proxy_send_timeout 10s;
+        }
+
+        # ─── FlightRecorder (Layer 5) ───
+        location /api/recorder/ {
+            limit_req zone=api_general burst=20 nodelay;
+            set $upstream_recorder flight-recorder.ccos.svc.cluster.local;
+            rewrite ^/api/recorder/(.*) /$1 break;
+            proxy_pass http://$upstream_recorder:8402;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 30s;
+            proxy_send_timeout 10s;
+        }
+
+        # ─── OpenClaw Agent Runtime ───
+        location /api/openclaw/ {
+            limit_req zone=api_chat burst=5 nodelay;
+            set $upstream_openclaw openclaw.ccos.svc.cluster.local;
+            rewrite ^/api/openclaw/(.*) /$1 break;
+            proxy_pass http://$upstream_openclaw:8403;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 10s;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+        }
+
+        # ─── Sandbox Preview ───
+        location /api/v1/sandbox/ {
+            set $upstream_sandbox openclaw.ccos.svc.cluster.local;
+            proxy_pass http://$upstream_sandbox:8403$request_uri;
+            proxy_set_header Host $host;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 10s;
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:;" always;
+        }
+
+        # ─── ReplayEngine (Layer 5→6) ───
+        location /api/replay/ {
+            limit_req zone=api_general burst=20 nodelay;
+            set $upstream_replay replay-engine.ccos.svc.cluster.local;
+            rewrite ^/api/replay/(.*) /$1 break;
+            proxy_pass http://$upstream_replay:8404;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 120s;
+            proxy_send_timeout 10s;
+        }
+
+        # ─── Memory Service ───
+        location /api/memory/ {
+            limit_req zone=api_general burst=20 nodelay;
+            set $upstream_memory memory-service.ccos.svc.cluster.local;
+            rewrite ^/api/memory/(.*) /$1 break;
+            proxy_pass http://$upstream_memory:8405;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 30s;
+            proxy_send_timeout 10s;
+        }
+
+        # ─── Code Runner ───
+        location /api/runner/ {
+            limit_req zone=api_chat burst=5 nodelay;
+            set $upstream_runner code-runner.ccos.svc.cluster.local;
+            rewrite ^/api/runner/(.*) /$1 break;
+            proxy_pass http://$upstream_runner:8406;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Request-ID $request_id;
+            proxy_http_version 1.1;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 60s;
+            proxy_send_timeout 10s;
+        }
+
+        # ═══ WebSocket Proxies ═══
+
+        location /ws/proxy/ {
+            set $upstream_ws_proxy agent-proxy.ccos.svc.cluster.local;
+            rewrite ^/ws/proxy/(.*) /ws/$1 break;
+            proxy_pass http://$upstream_ws_proxy:8400;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+        }
+
+        location /ws/recorder/ {
+            set $upstream_ws_recorder flight-recorder.ccos.svc.cluster.local;
+            rewrite ^/ws/recorder/(.*) /ws/$1 break;
+            proxy_pass http://$upstream_ws_recorder:8402;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+        }
+
+        location /ws/openclaw/ {
+            set $upstream_ws_openclaw openclaw.ccos.svc.cluster.local;
+            rewrite ^/ws/openclaw/(.*) /ws/$1 break;
+            proxy_pass http://$upstream_ws_openclaw:8403;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+        }
+
+        location /ws/terminal/ {
+            set $upstream_ws_terminal openclaw.ccos.svc.cluster.local;
+            proxy_pass http://$upstream_ws_terminal:8403/ws/terminal;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+        }
+
+        location /ws/replay/ {
+            set $upstream_ws_replay replay-engine.ccos.svc.cluster.local;
+            proxy_pass http://$upstream_ws_replay:8404/ws/replay;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_read_timeout 86400s;
+            proxy_send_timeout 86400s;
+        }
+
+        # ─── Catch-all for undefined API routes ───
+        # MUST be a prefix match (not regex ~) — regex would override all /api/* prefix locations
+        location /api/ {
+            default_type application/json;
+            return 404 '{"error":"not_found","message":"No upstream service matches this route"}';
+        }
+    }
