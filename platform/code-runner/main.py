@@ -35,9 +35,9 @@ from pydantic import BaseModel, Field
 # Configuration
 # ═══════════════════════════════════════════════════════════════
 
-MAX_TIMEOUT = int(os.getenv("MAX_TIMEOUT", "30"))  # seconds
-MAX_OUTPUT = int(os.getenv("MAX_OUTPUT", "102400"))  # 100KB
-MAX_CODE_SIZE = int(os.getenv("MAX_CODE_SIZE", "51200"))  # 50KB
+MAX_TIMEOUT = int(os.getenv("MAX_TIMEOUT", "120"))  # seconds (increased for pip install)
+MAX_OUTPUT = int(os.getenv("MAX_OUTPUT", "204800"))  # 200KB
+MAX_CODE_SIZE = int(os.getenv("MAX_CODE_SIZE", "102400"))  # 100KB
 SANDBOX_DIR = os.getenv("SANDBOX_DIR", "/sandbox")
 PERSIST_DIR = os.getenv("PERSIST_DIR", "/persist")  # Persistent workspace for sessions
 
@@ -49,7 +49,7 @@ PERSIST_DIR = os.getenv("PERSIST_DIR", "/persist")  # Persistent workspace for s
 class ExecuteRequest(BaseModel):
     code: str = Field(..., max_length=MAX_CODE_SIZE)
     language: str = Field(default="python", pattern=r"^(python|javascript|bash|html)$")
-    timeout: int = Field(default=10, ge=1, le=MAX_TIMEOUT)
+    timeout: int = Field(default=30, ge=1, le=MAX_TIMEOUT)
     session_id: str = Field(default="default")
     filename: Optional[str] = None  # Optional filename for file_write-style usage
 

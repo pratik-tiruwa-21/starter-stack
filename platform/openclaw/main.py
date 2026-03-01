@@ -129,7 +129,9 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "execute_code",
-            "description": "Execute code (Python, JavaScript, Bash) or write HTML files in a sandboxed environment. Use for building apps, running scripts, data processing.",
+            "description": "Execute code (Python, JavaScript, Bash) or write HTML files in a sandboxed environment. "
+                           "Use language='bash' for shell commands like 'pip install <package>'. "
+                           "Use for building apps, running scripts, installing packages, data processing.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -310,11 +312,11 @@ class CodeRunnerClient:
     """Client for the code-runner sandbox service. Executes code in isolated Docker containers."""
 
     def __init__(self):
-        self.client = httpx.AsyncClient(timeout=35.0)
+        self.client = httpx.AsyncClient(timeout=180.0)  # Long timeout for pip install + code execution
         self.base_url = CODE_RUNNER_URL
 
     async def execute(self, language: str, code: str, session_id: str,
-                      filename: str = "") -> dict:
+                      filename: str = "", timeout: int = 60) -> dict:
         """Execute code in the sandbox and return result."""
         try:
             resp = await self.client.post(
@@ -324,7 +326,7 @@ class CodeRunnerClient:
                     "code": code,
                     "session_id": session_id,
                     "filename": filename or None,
-                    "timeout": 30,
+                    "timeout": timeout,
                 },
             )
             if resp.status_code == 200:
@@ -436,16 +438,46 @@ class MarkdownKernel:
     def get_system_prompt(self, kernel: KernelState) -> str:
         """Build the system prompt from kernel files — the 'boot config'."""
         parts = [
-            "You are OpenClaw, the AI agent runtime inside ClawdContext OS.",
+            "You are OpenClaw, a fully autonomous AI agent inside ClawdContext OS.",
             "You operate under the Markdown OS kernel — your instructions come from structured Markdown files.",
             "ALL your tool calls are mediated by AgentProxy (Layer 4 Reference Monitor).",
             "ALL your actions are recorded by FlightRecorder (Layer 5 Audit Log).",
+            "",
+            "═══ AUTONOMY PROTOCOL ═══",
+            "You are a FULLY AUTONOMOUS agent. When a user asks you to do something:",
+            "1. PLAN: Break the task into steps mentally before acting.",
+            "2. CHECK: Use `manage_skill` to see if a relevant skill exists.",
+            "3. CREATE: If no skill exists for the task, use `create_skill` to create one FIRST.",
+            "4. INSTALL: If you need Python packages, use `execute_code` with language='bash' and code='pip install <package>'.",
+            "5. EXECUTE: Run code via `execute_code` to produce the actual output.",
+            "6. DELIVER: Write output files and provide preview links to the user.",
+            "",
+            "CRITICAL AUTONOMY RULES:",
+            "- NEVER say 'I cannot do this' — instead, CREATE the capability you need.",
+            "- NEVER ask the user to install packages — do it yourself via bash.",
+            "- NEVER stop at listing skills — if the skill you need is missing, CREATE it and CONTINUE.",
+            "- ALWAYS chain multiple tool calls to complete the full task.",
+            "- ALWAYS produce a real output file (not just text describing what you would do).",
+            "- For presentations: install python-pptx, generate a real .pptx file, save to output/.",
+            "- For data analysis: install pandas/matplotlib, generate real charts, save to output/.",
+            "- For web apps: create HTML/CSS/JS files directly via execute_code with language='html'.",
+            "",
+            "MULTI-STEP EXECUTION:",
+            "You can make multiple tool calls per turn. The system will execute ALL of them.",
+            "After your tools run, you will see the results and can make MORE tool calls.",
+            "This loop continues until the task is FULLY COMPLETE (up to 10 iterations).",
+            "",
+            "EXAMPLE AUTONOMOUS FLOW:",
+            "User: 'Create a presentation about AI security'",
+            "→ Step 1: create_skill(name='presentation-builder', ...)",
+            "→ Step 2: execute_code(language='bash', code='pip install python-pptx')",
+            "→ Step 3: execute_code(language='python', code='<generate .pptx file>')",
+            "→ Step 4: Deliver the file path and any preview to the user.",
             "",
         ]
 
         if kernel.claude_md:
             parts.append("=== BOOT CONFIG (CLAUDE.md) ===")
-            # Truncate aggressively to save tokens for code generation (Eureka #3)
             parts.append(kernel.claude_md[:2000])
             parts.append("")
 
@@ -467,18 +499,23 @@ class MarkdownKernel:
 
         parts.append(f"Context Efficiency Ratio: {kernel.cer:.4f} (target > 0.6)")
         parts.append("")
-        parts.append("When you need to perform actions, declare tool calls.")
-        parts.append("They will be routed through AgentProxy for security checks.")
+
+        parts.append("═══ TOOL REFERENCE ═══")
+        parts.append("- `execute_code`: Run Python/JavaScript/Bash code or write HTML. Use language='bash' for pip install.")
+        parts.append("- `file_read`: Read a file's contents. Use when user says 'cat', 'read', 'show', 'open'.")
+        parts.append("- `file_write`: Write content to a file. Paths relative to workspace.")
+        parts.append("- `file_list`: List directory contents. Use when user says 'ls', 'dir'.")
+        parts.append("- `search_workspace`: Grep text across workspace files.")
+        parts.append("- `security_scan`: Run TTP pattern scan on workspace.")
+        parts.append("- `create_skill`: Create a new SKILL.md dynamically. Use when you need a new capability.")
+        parts.append("- `manage_skill`: List/inspect/delete skills. Use 'list' to check available skills.")
         parts.append("")
-        parts.append("IMPORTANT — Tool usage guidelines:")
-        parts.append("- For BUILDING apps, games, demos, or any HTML/CSS/JS: use `execute_code` with language='html' and a filename")
-        parts.append("- For RUNNING Python/JS/Bash code: use `execute_code` with the appropriate language")
-        parts.append("- For READING files (cat, view, show, open, read): use `file_read` with the path")
-        parts.append("- For WRITING files: use `file_write` with path and content")
-        parts.append("- For LISTING files/directories (ls, dir): use `file_list`")
-        parts.append("- For SEARCHING text (grep, search, find): use `search_workspace`")
-        parts.append("- Always prefer `execute_code` over `file_write` when the user wants to BUILD something")
-        parts.append("- When user says 'cat X' or 'read X' or 'show X', ALWAYS use file_read — NEVER use file_list")
+        parts.append("ROUTING RULES:")
+        parts.append("- For BUILDING apps/demos/HTML: use `execute_code` with language='html' and a filename.")
+        parts.append("- Always prefer `execute_code` over `file_write` when building something runnable.")
+        parts.append("- When user says 'cat X' or 'read X': ALWAYS use `file_read` — NEVER `file_list`.")
+        parts.append("- For installing packages: use `execute_code` with language='bash', code='pip install ...'")
+        parts.append("- Output files go to `output/` directory (writable). Use `file_write` with path='output/filename'.")
 
         return "\n".join(parts)
 
@@ -495,7 +532,7 @@ class ToolExecutor:
     """
 
     def __init__(self):
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(timeout=180.0)  # Long timeout for agentic multi-step
         self.code_runner = CodeRunnerClient()
 
     async def execute(self, skill: str, tool_call: ToolCall,
@@ -595,11 +632,14 @@ class ToolExecutor:
             language = args.get("language", "python")
             code = args.get("code", "")
             filename = args.get("filename", "")
-            print(f"[ToolExec] execute_code: lang={language}, code_len={len(code)}, filename={filename!r}")
+            # Use longer timeout for bash (pip install) and complex Python
+            exec_timeout = 90 if language == "bash" or "pip install" in code else 60
+            print(f"[ToolExec] execute_code: lang={language}, code_len={len(code)}, filename={filename!r}, timeout={exec_timeout}")
 
             result = await self.code_runner.execute(
                 language=language, code=code,
                 session_id=session_id, filename=filename,
+                timeout=exec_timeout,
             )
             print(f"[ToolExec] code-runner result: exit_code={result.get('exit_code')}, files={result.get('files_created')}")
 
@@ -1615,85 +1655,135 @@ async def chat(req: ChatRequest):
         response_text, tool_calls = await llm.generate(all_messages, augmented_prompt, kernel_state)
         print(f"[Chat] LLM returned: {len(response_text)} chars, {len(tool_calls)} tool_calls")
 
-    # Execute tool calls through AgentProxy
-    tool_results: list[ToolResult] = []
+    # ════════════════════════════════════════════════════════════════
+    # AGENTIC LOOP — multi-step autonomous execution
+    # ════════════════════════════════════════════════════════════════
+    # The agent can loop: LLM → tools → results → LLM → more tools → ...
+    # This continues until the LLM returns NO tool calls (task complete)
+    # or we hit the max iteration limit (safety valve).
+    MAX_AGENTIC_ITERATIONS = 10
+    all_tool_results: list[ToolResult] = []
     last_preview_url: str | None = None
-    for tc in tool_calls:
-        stats["total_tool_calls"] += 1
+    iteration = 0
 
-        result = await tool_executor.execute(
-            skill=req.skill,
-            tool_call=tc,
-            session_id=req.session_id,
-            token_count=len(system_prompt) // 4,
-            token_budget=200000,
-        )
-        tool_results.append(result)
+    while tool_calls and iteration < MAX_AGENTIC_ITERATIONS:
+        iteration += 1
+        print(f"[AgenticLoop] Iteration {iteration}/{MAX_AGENTIC_ITERATIONS}: {len(tool_calls)} tool_calls")
 
-        # Track preview URL
-        if result.preview_url:
-            last_preview_url = result.preview_url
+        # Execute this batch of tool calls through AgentProxy
+        iteration_results: list[ToolResult] = []
+        for tc in tool_calls:
+            stats["total_tool_calls"] += 1
 
-        # Update stats
-        if result.decision == "ALLOW":
-            stats["tool_calls_allowed"] += 1
-        elif result.decision == "DENY":
-            stats["tool_calls_denied"] += 1
-        else:
-            stats["tool_calls_gated"] += 1
+            result = await tool_executor.execute(
+                skill=req.skill,
+                tool_call=tc,
+                session_id=req.session_id,
+                token_count=len(system_prompt) // 4,
+                token_budget=200000,
+            )
+            iteration_results.append(result)
+            all_tool_results.append(result)
 
-        # Log to FlightRecorder
-        await event_logger.log(
-            event_type="tool_call",
-            source="openclaw",
-            data={
-                "tool": tc.tool,
-                "skill": req.skill,
-                "decision": result.decision,
-                "session": req.session_id,
-            },
-        )
+            # Track preview URL
+            if result.preview_url:
+                last_preview_url = result.preview_url
 
-    # Augment response with tool outputs
-    if tool_results:
-        parts = [response_text, ""]
-        tool_summary_parts = []
-        for tr in tool_results:
+            # Update stats
+            if result.decision == "ALLOW":
+                stats["tool_calls_allowed"] += 1
+            elif result.decision == "DENY":
+                stats["tool_calls_denied"] += 1
+            else:
+                stats["tool_calls_gated"] += 1
+
+            # Log to FlightRecorder
+            await event_logger.log(
+                event_type="tool_call",
+                source="openclaw",
+                data={
+                    "tool": tc.tool,
+                    "skill": req.skill,
+                    "decision": result.decision,
+                    "session": req.session_id,
+                    "iteration": iteration,
+                },
+            )
+
+        # Build tool results summary for this iteration
+        iteration_summary_parts = []
+        for tr in iteration_results:
             if tr.decision == "ALLOW" and tr.output:
-                parts.append(f"**Result ({tr.tool}):**")
-                parts.append(f"```\n{tr.output[:5000]}\n```")
-                tool_summary_parts.append(f"Tool: {tr.tool}\nOutput:\n{tr.output[:3000]}")
+                iteration_summary_parts.append(f"Tool: {tr.tool}\nResult: {tr.output[:3000]}")
             elif tr.decision == "DENY":
-                parts.append(f"**Blocked ({tr.tool}):** {tr.error}")
-                tool_summary_parts.append(f"Tool: {tr.tool}\nBlocked: {tr.error}")
+                iteration_summary_parts.append(f"Tool: {tr.tool}\nDENIED: {tr.error}")
             elif tr.decision == "HUMAN_GATE":
-                parts.append(f"**Awaiting approval ({tr.tool}):** {tr.output}")
-        response_text = "\n".join(parts)
+                iteration_summary_parts.append(f"Tool: {tr.tool}\nAWAITING APPROVAL: {tr.output}")
 
-        # Multi-turn synthesis: send tool results back to LLM for a polished response
-        # Use a 45s timeout — if synthesis takes longer, use the raw tool output
-        if isinstance(llm, DeepSeekLLM) and tool_summary_parts:
+        tool_results_text = "\n\n".join(iteration_summary_parts)
+
+        # ── Feed results back to LLM for next step (agentic continuation) ──
+        # Add the tool results as context and ask the LLM if it wants to continue
+        if isinstance(llm, DeepSeekLLM):
             try:
-                print(f"[Chat] Starting synthesis with {len(tool_summary_parts)} tool summaries...")
-                synthesis = await asyncio.wait_for(
-                    llm.synthesize_after_tools(
-                        all_messages, augmented_prompt,
-                        "\n\n".join(tool_summary_parts),
-                    ),
-                    timeout=45.0,
+                # Build continuation messages: original conversation + tool results
+                continuation_messages = list(all_messages[-15:])  # Keep recent history
+                continuation_messages.append(ChatMessage(
+                    role="assistant",
+                    content=response_text or "Executing tools..."
+                ))
+                continuation_messages.append(ChatMessage(
+                    role="user",
+                    content=(
+                        f"Tool execution results (iteration {iteration}):\n\n"
+                        f"{tool_results_text}\n\n"
+                        "Based on these results, continue with the next steps. "
+                        "If the task is COMPLETE, respond with your final message (no tool calls). "
+                        "If more steps are needed, make the next tool calls."
+                    )
+                ))
+
+                print(f"[AgenticLoop] Feeding {len(tool_results_text)} chars of results back to LLM...")
+                response_text, tool_calls = await asyncio.wait_for(
+                    llm.generate(continuation_messages, augmented_prompt, kernel_state),
+                    timeout=120.0,
                 )
-                if synthesis:
-                    response_text = synthesis
-                    # Append preview link if available
-                    if last_preview_url:
-                        response_text += f"\n\n**Preview:** [Open Preview]({last_preview_url})"
+                print(f"[AgenticLoop] LLM iteration {iteration} returned: {len(response_text)} chars, {len(tool_calls)} tool_calls")
+
             except asyncio.TimeoutError:
-                print(f"[Chat] Synthesis timed out after 45s, using raw tool output")
-                # Append preview link to raw output
-                if last_preview_url:
-                    response_text += f"\n\n**Preview:** [Open Preview]({last_preview_url})"
+                print(f"[AgenticLoop] LLM timeout at iteration {iteration}, breaking loop")
+                tool_calls = []  # Stop the loop
             except Exception as e:
-                print(f"[OpenClaw] Synthesis error: {e}")
+                print(f"[AgenticLoop] Error at iteration {iteration}: {e}")
+                tool_calls = []
+        else:
+            # Non-DeepSeek LLM: single iteration only
+            tool_calls = []
+
+    if iteration >= MAX_AGENTIC_ITERATIONS:
+        print(f"[AgenticLoop] Hit max iterations ({MAX_AGENTIC_ITERATIONS}), stopping")
+        response_text += "\n\n⚠️ Reached maximum autonomous steps. Please provide guidance for next steps."
+
+    # Build final response with all tool outputs
+    tool_results = all_tool_results  # For downstream logging compatibility
+    if all_tool_results:
+        # If the LLM already synthesized a final response (last iteration had no tools), use it
+        # Otherwise build a summary
+        if not response_text.strip() or iteration == 0:
+            parts = [""]
+            for tr in all_tool_results:
+                if tr.decision == "ALLOW" and tr.output:
+                    parts.append(f"**Result ({tr.tool}):**")
+                    parts.append(f"```\n{tr.output[:5000]}\n```")
+                elif tr.decision == "DENY":
+                    parts.append(f"**Blocked ({tr.tool}):** {tr.error}")
+                elif tr.decision == "HUMAN_GATE":
+                    parts.append(f"**Awaiting approval ({tr.tool}):** {tr.output}")
+            response_text = "\n".join(parts)
+
+        # Append preview link if available
+        if last_preview_url and last_preview_url not in response_text:
+            response_text += f"\n\n**Preview:** [Open Preview]({last_preview_url})"
 
     # Save assistant response
     history.append(ChatMessage(role="assistant", content=response_text))
