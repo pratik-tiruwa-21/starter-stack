@@ -1,0 +1,120 @@
+# AgentProxy Configuration
+# Layer 4 — Runtime Reference Monitor
+
+server:
+  host: "0.0.0.0"
+  port: 8400
+  workers: 2
+  log_level: "info"
+
+# Policy engine
+policies:
+  capabilities: "security/policies/capabilities.rego"
+  rate_limits: "security/policies/rate-limits.rego"
+  flow_control: "security/policies/flow-control.rego"
+  
+  # OPA server (if running as daemon)
+  # opa_url: "http://localhost:8181"
+
+# Human-in-the-loop gates
+human_gates:
+  enabled: true
+  actions:
+    - file_delete
+    - exec
+    - credential_access
+    - network_unrestricted
+  
+  # How to request approval
+  # Options: terminal, vscode, webhook
+  approval_method: "terminal"
+  timeout_seconds: 300
+  default_on_timeout: "DENY"
+
+# Semantic firewall
+semantic_firewall:
+  enabled: false  # Enable when you have a second LLM configured
+  provider: "ollama"
+  model: "llama3.2"
+  endpoint: "http://localhost:11434"
+  
+  # What to check
+  checks:
+    - "data_exfiltration"
+    - "prompt_injection"
+    - "privilege_escalation"
+    - "credential_access"
+
+# Audit logging
+audit:
+  path: "audit.log"
+  format: "jsonl"
+  hash_chain: true
+  hash_algorithm: "sha256"
+  
+  # Retention
+  max_size_mb: 100
+  rotate_count: 5
+  
+  # Export to FlightRecorder (Layer 5)
+  export:
+    enabled: false
+    # prometheus_port: 9401
+    # loki_url: "http://localhost:3100"
+
+# Rate limiting defaults
+rate_limits:
+  default_rpm: 60           # Requests per minute
+  default_token_budget: 50000
+  burst_multiplier: 1.5
+  
+  # Per-skill overrides loaded from SKILL.md frontmatter
+  use_skill_frontmatter: true
+
+# CER integration
+cer:
+  enforce: true
+  critical_threshold: 0.3   # DENY all at CER < 0.3
+  warning_threshold: 0.6    # WARN + restrict skill loading
+  
+  # Source of CER data
+  # Options: extension (VS Code), cli (ccos-cer), prometheus
+  source: "cli"
+
+# Sandbox integration (Layer 3)
+sandbox:
+  enforce: true
+  default_profile: "restricted"
+  
+  profiles:
+    restricted:
+      network: false
+      filesystem: "readonly"
+      capabilities: []
+    
+    network_allowed:
+      network: true
+      network_policy: "security/sandbox/network-policy.yaml"
+      filesystem: "readonly"
+      capabilities: []
+
+# Metrics
+metrics:
+  enabled: true
+  port: 9401
+  path: "/metrics"
+  
+  # What to export
+  counters:
+    - "proxy_requests_total"
+    - "proxy_decisions_total"
+    - "policy_evaluations_total"
+  
+  histograms:
+    - "proxy_latency_seconds"
+    - "policy_evaluation_seconds"
+  
+  gauges:
+    - "active_sessions"
+    - "current_cer"
+    - "skills_loaded"
